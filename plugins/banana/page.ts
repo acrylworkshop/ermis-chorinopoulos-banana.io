@@ -75,7 +75,7 @@ export function bananaPage(): string {
         <canvas id="banana-canvas" width="640" height="640" aria-label="The banana game board"></canvas>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
-          <p id="banana-overlay-text">Arrows, WASD or swipe. The banana wraps around the counter, so only its own body and the ripening can stop it.</p>
+          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter and ripens on its own, then moulds over. Frost buys you time.</p>
           <button id="banana-start" type="button">Start</button>
           <form id="banana-save" hidden>
             <input id="banana-name" maxlength="16" placeholder="Your name" autocomplete="nickname" required>
@@ -189,9 +189,12 @@ export function bananaPage(): string {
         ripenessEl.textContent = Math.round(game.ripeness) + '%'
         fillEl.style.width = Math.min(100, game.ripeness) + '%'
         fillEl.style.background = bananaColor(game.ripeness)
-        bandEl.textContent = isGolden()
-          ? 'Golden. Every point counts double.'
-          : 'Golden band: ripeness 25% to 60%, doubled points'
+        bandEl.textContent =
+          game.ripeness > 60
+            ? 'Rotting. Mould is spreading along the peel.'
+            : isGolden()
+              ? 'Golden. Every point counts double.'
+              : 'Golden band: ripeness 25% to 60%, doubled points'
       }
 
       function queueDir(nx, ny) {
@@ -458,6 +461,8 @@ export function bananaPage(): string {
 
         const ripe = game.ripeness
         const shine = bananaColor(Math.min(100, ripe + 8), 14, 2)
+        // Rot begins before the end, so the mould is visible for the last part of a run.
+        const rot = Math.max(0, Math.min(1, (ripe - 60) / 40))
 
         view.save()
         view.shadowColor = 'rgba(0, 0, 0, 0.55)'
@@ -478,8 +483,8 @@ export function bananaPage(): string {
         const edges = []
         for (const sample of samples) {
           const local = Math.max(0, Math.min(100, ripe - (1 - sample.t) * 15))
-          bases.push(bananaColor(local))
-          edges.push(bananaColor(local, -15, -9))
+          bases.push(bananaColor(local, -9 * rot, -11 * rot))
+          edges.push(bananaColor(local, -15 - 6 * rot, -9))
         }
 
         for (let i = 0; i < samples.length; i += 1) {
@@ -495,7 +500,7 @@ export function bananaPage(): string {
           view.fill()
         }
 
-        view.globalAlpha = 0.4
+        view.globalAlpha = 0.4 * (1 - rot * 0.75)
         view.fillStyle = shine
         for (const sample of samples) {
           const r = radiusAt(sample.t)
@@ -543,6 +548,78 @@ export function bananaPage(): string {
               Math.PI * 2,
             )
             view.fill()
+          }
+        }
+
+        // Rot: dark sunken patches, then mould colonies with a pale fuzzy edge, anchored along the peel.
+        const sampleAt = (t) => {
+          let lo = 0
+          let hi = samples.length - 1
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1
+            if (samples[mid].t < t) lo = mid + 1
+            else hi = mid
+          }
+          return samples[lo]
+        }
+
+        if (rot > 0) {
+          const patches = Math.round(rot * 5)
+          for (let p = 0; p < patches; p += 1) {
+            const sample = sampleAt(0.08 + 0.86 * ((p + 0.5) / Math.max(1, patches)) + noise(p * 4.7) * 0.06)
+            const r = radiusAt(sample.t)
+            view.fillStyle = 'rgba(40, 24, 7, ' + (0.16 + rot * 0.34).toFixed(3) + ')'
+            view.beginPath()
+            view.ellipse(
+              sample.x + sample.nx * r * 0.12,
+              sample.y + sample.ny * r * 0.12,
+              r * (0.55 + noise(p * 1.3) * 0.35),
+              r * 0.5,
+              sample.t * 4,
+              0,
+              Math.PI * 2,
+            )
+            view.fill()
+          }
+
+          // Mould starts near the stem, where a banana keeps its moisture, and spreads along the peel.
+          const colonies = Math.floor(rot * 7)
+          for (let c = 0; c < colonies; c += 1) {
+            const path = (c + 0.5) / colonies
+            const sample = sampleAt(Math.min(0.96, 0.04 + 0.92 * Math.pow(path, 1.3)))
+            const r = radiusAt(sample.t)
+            const side = noise(c * 3.7) > 0.5 ? 1 : -1
+            const mx = sample.x + sample.nx * r * 0.42 * side
+            const my = sample.y + sample.ny * r * 0.42 * side
+            const size = r * (0.2 + noise(c * 1.9) * 0.2)
+
+            view.save()
+            view.shadowColor = 'rgba(214, 228, 186, 0.55)'
+            view.shadowBlur = 6 * UNIT
+            view.fillStyle = 'rgba(208, 220, 178, 0.88)'
+            for (const blob of [[-0.55, -0.3, 1], [0.45, -0.45, 0.82], [0.1, 0.5, 0.92]]) {
+              view.beginPath()
+              view.arc(mx + blob[0] * size, my + blob[1] * size, size * blob[2], 0, Math.PI * 2)
+              view.fill()
+            }
+            view.restore()
+
+            view.fillStyle = 'rgba(62, 76, 38, 0.6)'
+            view.beginPath()
+            view.arc(mx, my, size * 0.32, 0, Math.PI * 2)
+            view.fill()
+
+            view.strokeStyle = 'rgba(196, 210, 166, 0.75)'
+            view.lineWidth = 0.8 * UNIT
+            for (let hair = 0; hair < 8; hair += 1) {
+              const angle = (hair / 8) * Math.PI * 2 + noise(c + hair * 1.7) * 0.7
+              const from = size * 0.9
+              const to = size * (1.35 + noise(c * 2 + hair) * 0.75)
+              view.beginPath()
+              view.moveTo(mx + Math.cos(angle) * from, my + Math.sin(angle) * from)
+              view.lineTo(mx + Math.cos(angle) * to, my + Math.sin(angle) * to)
+              view.stroke()
+            }
           }
         }
 
@@ -715,7 +792,7 @@ export function bananaPage(): string {
             step()
           }
           if (game.running && game.ripeness >= 100) {
-            finish('Rotten!', 'The banana went brown before it got big.')
+            finish('Rotten!', 'The mould took the whole banana.')
           }
           hud()
         }
