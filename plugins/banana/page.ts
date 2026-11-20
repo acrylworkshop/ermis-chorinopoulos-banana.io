@@ -16,7 +16,7 @@ export function bananaPage(): string {
       :root{color-scheme:dark;--bg:#0e0b08;--panel:#1b1510;--edge:#33281c;--text:#f3eee2;--dim:#a89a86;--gold:#ffd45c;--leaf:#8bd450;--bad:#c96a3c}
       *{box-sizing:border-box}
       body{margin:0;padding:22px 14px 40px;background:radial-gradient(120% 80% at 50% 0%,#221a12 0%,var(--bg) 62%);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-      .wrap{max-width:540px;margin:0 auto}
+      .wrap{max-width:680px;margin:0 auto}
       header{text-align:center;margin-bottom:18px}
       h1{margin:0;font-size:2.1rem;letter-spacing:.04em}
       h1 span{color:var(--gold)}
@@ -72,7 +72,7 @@ export function bananaPage(): string {
         <p class="band" id="banana-band">Golden band: ripeness 25% to 60%, doubled points</p>
       </section>
       <div class="stage">
-        <canvas id="banana-canvas" width="480" height="480" aria-label="The banana game board"></canvas>
+        <canvas id="banana-canvas" width="640" height="640" aria-label="The banana game board"></canvas>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
           <p id="banana-overlay-text">Arrows, WASD or swipe. The banana wraps around the counter, so only its own body and the ripening can stop it.</p>
@@ -104,6 +104,8 @@ export function bananaPage(): string {
       const COLS = 20
       const ROWS = 20
       const CELL = canvas.width / COLS
+      // Everything drawn on the peel and the fruit is sized against this, so a bigger board scales the whole picture with it.
+      const UNIT = CELL / 24
       const scoreEl = document.getElementById('banana-score')
       const lengthEl = document.getElementById('banana-length')
       const bestEl = document.getElementById('banana-best')
@@ -289,13 +291,13 @@ export function bananaPage(): string {
         woodView.fillStyle = base
         woodView.fillRect(0, 0, wood.width, wood.height)
 
-        const plankHeight = 118
+        const plankHeight = wood.height / 4
         for (let y = 0; y < wood.height; y += plankHeight) {
           woodView.fillStyle = 'rgba(255, 214, 160, ' + (0.02 + random() * 0.05).toFixed(3) + ')'
           woodView.fillRect(0, y, wood.width, plankHeight)
           woodView.fillStyle = 'rgba(0, 0, 0, 0.4)'
           woodView.fillRect(0, y, wood.width, 2)
-          for (let line = 0; line < 18; line += 1) {
+          for (let line = 0; line < 24; line += 1) {
             const ly = y + 6 + random() * (plankHeight - 12)
             woodView.strokeStyle = line % 2 === 0 ? 'rgba(0,0,0,0.14)' : 'rgba(255,226,180,0.05)'
             woodView.lineWidth = 0.6 + random() * 1.3
@@ -421,7 +423,7 @@ export function bananaPage(): string {
       /** A banana is thin at the stem, thick in the middle and thin at the tip. */
       function radiusAt(t) {
         const tuck = Math.max(0, Math.min(1, t))
-        return 4.6 + 6.6 * Math.sin(Math.PI * Math.pow(tuck, 0.85))
+        return CELL * (0.2 + 0.29 * Math.sin(Math.PI * Math.pow(tuck, 0.85)))
       }
 
       function drawBanana() {
@@ -459,11 +461,11 @@ export function bananaPage(): string {
 
         view.save()
         view.shadowColor = 'rgba(0, 0, 0, 0.55)'
-        view.shadowBlur = 12
-        view.shadowOffsetX = 4
-        view.shadowOffsetY = 8
+        view.shadowBlur = 12 * UNIT
+        view.shadowOffsetX = 4 * UNIT
+        view.shadowOffsetY = 8 * UNIT
         view.strokeStyle = 'rgba(26, 15, 5, 0.5)'
-        view.lineWidth = 16
+        view.lineWidth = 22 * UNIT
         view.lineCap = 'round'
         view.lineJoin = 'round'
         for (const run of runs) {
@@ -483,7 +485,7 @@ export function bananaPage(): string {
         for (let i = 0; i < samples.length; i += 1) {
           view.fillStyle = edges[i]
           view.beginPath()
-          view.arc(samples[i].x, samples[i].y, radiusAt(samples[i].t) + 1.2, 0, Math.PI * 2)
+          view.arc(samples[i].x, samples[i].y, radiusAt(samples[i].t) + 1.6 * UNIT, 0, Math.PI * 2)
           view.fill()
         }
         for (let i = 0; i < samples.length; i += 1) {
@@ -507,13 +509,13 @@ export function bananaPage(): string {
         view.lineCap = 'round'
         view.globalAlpha = 0.5
         view.strokeStyle = shine
-        view.lineWidth = 1.1
+        view.lineWidth = 1.1 * UNIT
         for (const ridge of ridgeLight) {
           if (ridge.length > 1 && smoothPath(ridge)) view.stroke()
         }
         view.globalAlpha = 0.22
         view.strokeStyle = '#2a1a06'
-        view.lineWidth = 1.6
+        view.lineWidth = 1.6 * UNIT
         for (const ridge of ridgeShade) {
           if (ridge.length > 1 && smoothPath(ridge)) view.stroke()
         }
@@ -554,15 +556,15 @@ export function bananaPage(): string {
         const sx = tx / tl
         const sy = ty / tl
         view.strokeStyle = '#71592a'
-        view.lineWidth = 4.2
+        view.lineWidth = 4.2 * UNIT
         view.lineCap = 'round'
         view.beginPath()
         view.moveTo(tail.x, tail.y)
-        view.lineTo(tail.x + sx * 8, tail.y + sy * 8)
+        view.lineTo(tail.x + sx * 8 * UNIT, tail.y + sy * 8 * UNIT)
         view.stroke()
         view.fillStyle = '#c9b37a'
         view.beginPath()
-        view.ellipse(tail.x + sx * 9.5, tail.y + sy * 9.5, 2.4, 1.6, Math.atan2(sy, sx), 0, Math.PI * 2)
+        view.ellipse(tail.x + sx * 9.5 * UNIT, tail.y + sy * 9.5 * UNIT, 2.4 * UNIT, 1.6 * UNIT, Math.atan2(sy, sx), 0, Math.PI * 2)
         view.fill()
 
         const head = samples[samples.length - 1]
@@ -571,43 +573,43 @@ export function bananaPage(): string {
         const angle = Math.atan2(uy, ux)
         view.fillStyle = '#3f2b0f'
         view.beginPath()
-        view.ellipse(head.x + ux * 3.2, head.y + uy * 3.2, 3.1, 2.2, angle, 0, Math.PI * 2)
+        view.ellipse(head.x + ux * 3.2 * UNIT, head.y + uy * 3.2 * UNIT, 3.1 * UNIT, 2.2 * UNIT, angle, 0, Math.PI * 2)
         view.fill()
         view.fillStyle = 'rgba(255, 240, 200, 0.5)'
         view.beginPath()
-        view.arc(head.x + ux * 4.6, head.y + uy * 4.6, 0.9, 0, Math.PI * 2)
+        view.arc(head.x + ux * 4.6 * UNIT, head.y + uy * 4.6 * UNIT, 0.9 * UNIT, 0, Math.PI * 2)
         view.fill()
 
         for (const side of [-1, 1]) {
-          const ex = head.x + head.nx * 2.9 * side - ux * 1.6
-          const ey = head.y + head.ny * 2.9 * side - uy * 1.6
+          const ex = head.x + head.nx * 2.9 * UNIT * side - ux * 1.6 * UNIT
+          const ey = head.y + head.ny * 2.9 * UNIT * side - uy * 1.6 * UNIT
           view.fillStyle = '#ffffff'
           view.beginPath()
-          view.ellipse(ex, ey, 2.3, 2, angle, 0, Math.PI * 2)
+          view.ellipse(ex, ey, 2.3 * UNIT, 2 * UNIT, angle, 0, Math.PI * 2)
           view.fill()
           view.fillStyle = '#20180c'
           view.beginPath()
-          view.arc(ex + ux * 0.8, ey + uy * 0.8, 1.15, 0, Math.PI * 2)
+          view.arc(ex + ux * 0.8 * UNIT, ey + uy * 0.8 * UNIT, 1.15 * UNIT, 0, Math.PI * 2)
           view.fill()
           view.fillStyle = 'rgba(255,255,255,0.9)'
           view.beginPath()
-          view.arc(ex + ux * 0.8 - 0.45, ey + uy * 0.8 - 0.55, 0.42, 0, Math.PI * 2)
+          view.arc(ex + ux * 0.8 * UNIT - 0.45 * UNIT, ey + uy * 0.8 * UNIT - 0.55 * UNIT, 0.42 * UNIT, 0, Math.PI * 2)
           view.fill()
         }
       }
 
       function drawFood(food, time) {
-        const bob = Math.sin(time * 0.0032 + food.x * 0.9 + food.y * 1.3) * 1.6
+        const bob = Math.sin(time * 0.0032 + food.x * 0.9 + food.y * 1.3) * 1.6 * UNIT
         const cx = food.x * CELL + CELL / 2
         const cy = food.y * CELL + CELL / 2 + bob
 
         view.fillStyle = 'rgba(0, 0, 0, 0.35)'
         view.beginPath()
-        view.ellipse(cx + 1, cy + 9 - bob, 7.5, 3, 0, 0, Math.PI * 2)
+        view.ellipse(cx + UNIT, cy + 9 * UNIT - bob, 7.5 * UNIT, 3 * UNIT, 0, 0, Math.PI * 2)
         view.fill()
 
         if (food.kind === 'sugar') {
-          const h = 7
+          const h = 7 * UNIT
           view.beginPath()
           view.moveTo(cx, cy - h)
           view.lineTo(cx + h, cy - h / 2)
@@ -634,7 +636,7 @@ export function bananaPage(): string {
           view.fill()
           view.fillStyle = 'rgba(255,255,255,0.9)'
           view.beginPath()
-          view.arc(cx - 2, cy - 4.4, 1.1, 0, Math.PI * 2)
+          view.arc(cx - 2 * UNIT, cy - 4.4 * UNIT, 1.1 * UNIT, 0, Math.PI * 2)
           view.fill()
           return
         }
@@ -642,54 +644,56 @@ export function bananaPage(): string {
         if (food.kind === 'ice') {
           view.save()
           view.strokeStyle = '#d6f1ff'
-          view.lineWidth = 1.9
+          view.lineWidth = 1.9 * UNIT
           view.lineCap = 'round'
           view.shadowColor = 'rgba(126, 214, 255, 0.9)'
-          view.shadowBlur = 9
+          view.shadowBlur = 9 * UNIT
           for (let arm = 0; arm < 6; arm += 1) {
             const armAngle = (arm * Math.PI) / 3
             const ax = Math.cos(armAngle)
             const ay = Math.sin(armAngle)
             view.beginPath()
             view.moveTo(cx, cy)
-            view.lineTo(cx + ax * 8.5, cy + ay * 8.5)
+            view.lineTo(cx + ax * 8.5 * UNIT, cy + ay * 8.5 * UNIT)
             view.stroke()
             view.beginPath()
-            view.moveTo(cx + ax * 4.6, cy + ay * 4.6)
-            view.lineTo(cx + ax * 7 + ay * 3, cy + ay * 7 - ax * 3)
+            view.moveTo(cx + ax * 4.6 * UNIT, cy + ay * 4.6 * UNIT)
+            view.lineTo(cx + ax * 7 * UNIT + ay * 3 * UNIT, cy + ay * 7 * UNIT - ax * 3 * UNIT)
             view.stroke()
           }
           view.restore()
           view.fillStyle = '#ffffff'
           view.beginPath()
-          view.arc(cx, cy, 1.8, 0, Math.PI * 2)
+          view.arc(cx, cy, 1.8 * UNIT, 0, Math.PI * 2)
           view.fill()
           return
         }
 
         for (const grape of [[-4.5, -3], [3, -4.5], [-1, 1.5], [5, 1], [-6, 3], [1, 7]]) {
+          const gx = cx + grape[0] * UNIT
+          const gy = cy + grape[1] * UNIT
           view.fillStyle = '#7fae4a'
           view.beginPath()
-          view.arc(cx + grape[0], cy + grape[1], 4.1, 0, Math.PI * 2)
+          view.arc(gx, gy, 4.1 * UNIT, 0, Math.PI * 2)
           view.fill()
           view.fillStyle = '#a9d274'
           view.beginPath()
-          view.arc(cx + grape[0] - 0.6, cy + grape[1] - 0.8, 3.2, 0, Math.PI * 2)
+          view.arc(gx - 0.6 * UNIT, gy - 0.8 * UNIT, 3.2 * UNIT, 0, Math.PI * 2)
           view.fill()
           view.fillStyle = 'rgba(255,255,255,0.7)'
           view.beginPath()
-          view.arc(cx + grape[0] - 1.4, cy + grape[1] - 1.8, 0.9, 0, Math.PI * 2)
+          view.arc(gx - 1.4 * UNIT, gy - 1.8 * UNIT, 0.9 * UNIT, 0, Math.PI * 2)
           view.fill()
         }
         view.strokeStyle = '#6b5426'
-        view.lineWidth = 1.6
+        view.lineWidth = 1.6 * UNIT
         view.beginPath()
-        view.moveTo(cx, cy - 6)
-        view.lineTo(cx + 1, cy - 11)
+        view.moveTo(cx, cy - 6 * UNIT)
+        view.lineTo(cx + UNIT, cy - 11 * UNIT)
         view.stroke()
         view.fillStyle = '#6f9c3c'
         view.beginPath()
-        view.ellipse(cx + 3.4, cy - 11, 3.4, 1.9, -0.5, 0, Math.PI * 2)
+        view.ellipse(cx + 3.4 * UNIT, cy - 11 * UNIT, 3.4 * UNIT, 1.9 * UNIT, -0.5, 0, Math.PI * 2)
         view.fill()
       }
 
