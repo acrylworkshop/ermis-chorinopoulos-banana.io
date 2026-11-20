@@ -8,10 +8,10 @@
     "id": "acrylblends.definitelyapp",
     "kind": "Blueprint",
     "version": "0.1.0",
-    "digest": "32145a7f5ac22db6f8c1c2bbc0d8dd119394c7ef9c0dea45aceb690dc4e13623"
+    "digest": "50077af6b779ed0cb71759dab242db6302fee2d4404a1163577e3a2404295678"
   },
   "parameters": {
-    "hostname": "127.0.0.1"
+    "hostname": "0.0.0.0"
   },
   "rows": [
     {
@@ -42,7 +42,7 @@
       "id": "server",
       "name": "acryl-node-server",
       "config": {
-        "hostname": "127.0.0.1"
+        "hostname": "0.0.0.0"
       }
     },
     {
@@ -60,7 +60,7 @@
     {
       "name": "banana",
       "origin": "local",
-      "digest": "sha256:3e47cc55fd531c0f7895314b304547d945a4e329c867c228556767d79bef4e9c",
+      "digest": "sha256:801a4e123f713acb943b97b1cccaceb877cabd1ff39e96aeb52ccdb441270862",
       "source": "plugins/banana"
     },
     {

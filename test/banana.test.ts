@@ -53,6 +53,13 @@ test('serves the game page and an empty board', () =>
     const html = await page.text()
     assert.ok(html.includes('<title>Ripe, a banana game</title>'), 'the page names the game')
     assert.ok(html.includes('id="banana-canvas"'), 'the page carries the board')
+    assert.ok(html.includes('const COLS = 30'), 'the board is 30 cells across')
+    assert.ok(html.includes('id="banana-nick"'), 'the page asks for the name it shows above the banana')
+    assert.ok(
+      html.includes('drawBanana(smoothCells(), game.ripeness, 1, myName)'),
+      'every banana is drawn with its player’s name',
+    )
+    assert.ok(html.includes('id="banana-join"'), 'the page has a line for the link others join with')
     assert.ok(html.includes("fetch('/banana/scores')"), 'the page asks its own route for the board')
     assert.deepEqual(await board(app), { scores: [] })
   }))
@@ -128,6 +135,15 @@ test('the shared counter takes a banana and hands the room to a reader', () =>
     )
     assert.equal(
       (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[99, 4]] })).status,
+      400,
+    )
+    // The board is 30 by 30, so its last cell is drawn and the cell past it is not.
+    assert.equal(
+      (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[29, 29]] })).status,
+      204,
+    )
+    assert.equal(
+      (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[30, 0]] })).status,
       400,
     )
 

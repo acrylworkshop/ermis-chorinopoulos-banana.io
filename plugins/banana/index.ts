@@ -5,6 +5,7 @@
  * written whole through a temporary file and a rename, so they survive a restart and a reload.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { Acryl } from '@acryldev/blends'
@@ -32,7 +33,7 @@ const SCORE_MAX = 1_000_000
 const ROOM_SIZE = 24
 const ROOM_TTL = 4000
 /** The board every page draws on, so a cell another player sends lands where this page draws it. */
-const GRID = 20
+const GRID = 30
 
 const escapeHtml = (text: string): string =>
   text
@@ -41,6 +42,36 @@ const escapeHtml = (text: string): string =>
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
 
+/** A home network's address first, so a friend on the same Wi-Fi gets the plain address rather than a VPN's. */
+function addressRank(address: string): number {
+  if (address.startsWith('192.168.')) return 0
+  if (address.startsWith('10.')) return 1
+  return /^172\.(1[6-9]|2\d|3[01])\./.test(address) ? 2 : 3
+}
+
+/** A virtual adapter (Hyper-V, Docker, a virtual machine) is not an address a friend on the network can reach. */
+const VIRTUAL = /vEthernet|Hyper-?V|Docker|WSL|VirtualBox|VMware|Loopback|Bluetooth/i
+
+/** This machine's address on the network, which the page turns into the link other people join with; nothing when it has none. */
+function lanAddress(): string | undefined {
+  const candidates: { name: string; address: string }[] = []
+  for (const [name, nets] of Object.entries(networkInterfaces()))
+    for (const net of nets ?? [])
+      if (net.family === 'IPv4' && !net.internal) candidates.push({ name, address: net.address })
+  // A real adapter first, then the home ranges, so the link is the one a person on the network can actually open.
+  candidates.sort(
+    (a, b) =>
+      Number(VIRTUAL.test(a.name)) - Number(VIRTUAL.test(b.name)) ||
+      addressRank(a.address) - addressRank(b.address),
+  )
+  return candidates[0]?.address
+}
+
+/** True while the app listens on this machine only: the join link works once it listens on the network. */
+function localOnly(ctx: Context): boolean {
+  const hostname = (ctx.get('nodeServer') as unknown as { hostname?: string } | undefined)?.hostname
+  return hostname === undefined || hostname === 'localhost' || hostname.startsWith('127.')
+}
 const byRank = (a: Score, b: Score): number => b.score - a.score || a.at - b.at
 
 function isScore(value: unknown): value is Score {
@@ -133,7 +164,9 @@ export function apply(ctx: Context): void {
   const board = (): Score[] => scores.slice(0, TOP)
 
   const app = new Acryl()
-    .get('/', (c) => c.html(bananaPage()))
+    .get('/', (c) =>
+      c.html(bananaPage({ size: GRID, lanAddress: lanAddress(), localOnly: localOnly(ctx) })),
+    )
     .get('/scores', (c) => c.json({ scores: board() }))
     .post('/scores', async (c) => {
       let body: unknown
@@ -204,7 +237,7 @@ export function apply(ctx: Context): void {
         return c.json(
           {
             error:
-              'a banana needs an id, a name, a score, a ripeness from 0 to 100 and its cells on a 20 by 20 board',
+              `a banana needs an id, a name, a score, a ripeness from 0 to 100 and its cells on a ${GRID} by ${GRID} board`,
           },
           400,
         )

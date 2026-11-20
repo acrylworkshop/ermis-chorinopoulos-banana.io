@@ -10,8 +10,8 @@ metadata:
 spec:
   runtime: cordis
   parameters:
-    # The address the server listens on.
-    hostname: { type: string, default: 127.0.0.1 }
+    # The address the server listens on. 0.0.0.0 lets other machines on the network join a game; 127.0.0.1 keeps it to this machine.
+    hostname: { type: string, default: "0.0.0.0" }
   rows:
     - id: router
       name: acryl-router

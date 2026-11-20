@@ -5,7 +5,16 @@
  * are at the root and in the frame the canvas page sends them to the same routes. Every value it puts on the page is set with
  * `textContent`, so a score or a name can never become markup.
  */
-export function bananaPage(): string {
+export interface BananaPageOptions {
+  /** How many cells the board has each way; the server checks a shared banana against the same number. */
+  readonly size: number
+  /** This machine's address on the network, so the page can offer other people a link to join with. */
+  readonly lanAddress?: string
+  /** True while the app listens on this machine only, so that link works only once it listens on the network. */
+  readonly localOnly?: boolean
+}
+
+export function bananaPage(options: BananaPageOptions): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -16,7 +25,7 @@ export function bananaPage(): string {
       :root{color-scheme:dark;--bg:#0e0b08;--panel:#1b1510;--edge:#33281c;--text:#f3eee2;--dim:#a89a86;--gold:#ffd45c;--leaf:#8bd450;--bad:#c96a3c}
       *{box-sizing:border-box}
       body{margin:0;padding:22px 14px 40px;background:radial-gradient(120% 80% at 50% 0%,#221a12 0%,var(--bg) 62%);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-      .wrap{max-width:680px;margin:0 auto}
+      .wrap{max-width:900px;margin:0 auto}
       header{text-align:center;margin-bottom:18px}
       h1{margin:0;font-size:2.1rem;letter-spacing:.04em}
       h1 span{color:var(--gold)}
@@ -26,6 +35,8 @@ export function bananaPage(): string {
       .label{display:block;color:var(--dim);font-size:.68rem;text-transform:uppercase;letter-spacing:.14em}
       .hud strong{font-size:1.35rem;font-variant-numeric:tabular-nums}
       .room{margin:0 0 10px;text-align:center;color:var(--dim);font-size:.8rem}
+      .join{margin:0 0 10px;text-align:center;color:var(--dim);font-size:.76rem;overflow-wrap:anywhere}
+      .join a{color:var(--gold)}
       .ripeness{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:10px 12px;margin-bottom:12px}
       .ripeness-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
       .bar{height:10px;border-radius:999px;background:#120d08;overflow:hidden;border:1px solid var(--edge)}
@@ -39,7 +50,9 @@ export function bananaPage(): string {
       .overlay p{margin:0;max-width:22rem;color:var(--dim);font-size:.9rem}
       .overlay form{display:flex;gap:8px;width:100%;max-width:20rem}
       .overlay form[hidden]{display:none}
-      .overlay input{flex:1;min-width:0;padding:8px 11px;border-radius:9px;border:1px solid var(--edge);background:#120d08;color:var(--text);font:inherit}
+      .overlay input{min-width:0;padding:8px 11px;border-radius:9px;border:1px solid var(--edge);background:#120d08;color:var(--text);font:inherit}
+      .overlay form input{flex:1}
+      #banana-nick{width:100%;max-width:20rem;text-align:center}
       .overlay .saved{margin:0;color:var(--leaf)}
       button{padding:9px 18px;border:0;border-radius:10px;background:var(--gold);color:#20180a;font:inherit;font-weight:700;cursor:pointer}
       button:hover{filter:brightness(1.07)}
@@ -67,17 +80,19 @@ export function bananaPage(): string {
         <div><span class="label">Length</span><strong id="banana-length">3</strong></div>
         <div><span class="label">Best</span><strong id="banana-best">-</strong></div>
       </section>
-      <p class="room" id="banana-room">Open this page in another window to play side by side.</p>
+      <p class="room" id="banana-room">Nobody else on the counter yet. Send a friend the join link below.</p>
+      <p class="join" id="banana-join" hidden></p>
       <section class="ripeness" aria-label="Ripeness">
         <div class="ripeness-head"><span class="label">Ripeness</span><span id="banana-ripeness">0%</span></div>
         <div class="bar"><div id="banana-fill"></div></div>
         <p class="band" id="banana-band">Golden band: ripeness 25% to 60%, doubled points</p>
       </section>
       <div class="stage">
-        <canvas id="banana-canvas" width="640" height="640" aria-label="The banana game board"></canvas>
+        <canvas id="banana-canvas" width="900" height="900" aria-label="The banana game board"></canvas>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
-          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, then moulds over. Other players on this counter show up live.</p>
+          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, then moulds over. Other players on this counter show up live, with their names above them.</p>
+          <input id="banana-nick" maxlength="16" placeholder="Your name" autocomplete="nickname" aria-label="Your name">
           <button id="banana-start" type="button">Start</button>
           <form id="banana-save" hidden>
             <input id="banana-name" maxlength="16" placeholder="Your name" autocomplete="nickname" required>
@@ -103,8 +118,11 @@ export function bananaPage(): string {
       const canvas = document.getElementById('banana-canvas')
       const view = canvas.getContext('2d')
       if (!view) throw new Error('this browser has no 2d canvas')
-      const COLS = 20
-      const ROWS = 20
+      const COLS = ${options.size}
+      const ROWS = ${options.size}
+      // This machine's network address and whether the server listens on this machine only: together they make the join link.
+      const LAN_ADDRESS = ${JSON.stringify(options.lanAddress ?? null)}
+      const LOCAL_ONLY = ${options.localOnly === true}
       const CELL = canvas.width / COLS
       // Everything drawn on the peel and the fruit is sized against this, so a bigger board scales the whole picture with it.
       const UNIT = CELL / 24
@@ -121,6 +139,8 @@ export function bananaPage(): string {
       const startBtn = document.getElementById('banana-start')
       const saveForm = document.getElementById('banana-save')
       const nameInput = document.getElementById('banana-name')
+      const nickInput = document.getElementById('banana-nick')
+      const joinEl = document.getElementById('banana-join')
       const savedEl = document.getElementById('banana-saved')
       const boardEl = document.getElementById('banana-board')
 
@@ -173,13 +193,15 @@ export function bananaPage(): string {
 
       function reset() {
         // A full banana at the start, not a stub: the game begins with something you can see and steer.
+        const mid = Math.floor(COLS / 2)
+        const row = Math.floor(ROWS / 2)
         game.snake = [
-          { x: 6, y: 10 },
-          { x: 5, y: 10 },
-          { x: 4, y: 10 },
-          { x: 3, y: 10 },
-          { x: 2, y: 10 },
-          { x: 1, y: 10 },
+          { x: mid + 1, y: row },
+          { x: mid, y: row },
+          { x: mid - 1, y: row },
+          { x: mid - 2, y: row },
+          { x: mid - 3, y: row },
+          { x: mid - 4, y: row },
         ]
         game.prev = game.snake.slice()
         game.alpha = 0
@@ -215,6 +237,8 @@ export function bananaPage(): string {
       }
 
       function start() {
+        const nick = nickInput.value.trim().slice(0, 16)
+        if (nick) myName = nick
         reset()
         game.running = true
         game.last = 0
@@ -230,6 +254,8 @@ export function bananaPage(): string {
         overlayText.textContent = text + ' You scored ' + game.score + ' with a banana ' + game.snake.length + ' long.'
         startBtn.textContent = 'Play again'
         saveForm.hidden = game.score <= 0
+        const nick = nickInput.value.trim().slice(0, 16)
+        if (nick) nameInput.value = nick
         savedEl.hidden = true
         overlay.hidden = false
         statusEl.textContent = title + ' ' + text + ' Score ' + game.score + '.'
@@ -686,10 +712,19 @@ export function bananaPage(): string {
         }
 
         if (label) {
-          view.fillStyle = 'rgba(255, 244, 214, 0.85)'
-          view.font = Math.round(10 * UNIT) + 'px system-ui, -apple-system, sans-serif'
+          // The player's name sits above the head in small letters, over a dark halo so it reads on the wood.
+          view.globalAlpha = 1
+          const size = Math.max(9, Math.round(9 * UNIT))
+          view.font = '600 ' + size + 'px system-ui, -apple-system, sans-serif'
           view.textAlign = 'center'
-          view.fillText(label, head.x, head.y - 13 * UNIT)
+          const half = view.measureText(label).width / 2
+          const x = Math.min(canvas.width - half - 2, Math.max(half + 2, head.x))
+          const y = Math.max(size, head.y - 12 * UNIT)
+          view.lineWidth = 3
+          view.strokeStyle = 'rgba(12, 8, 4, 0.85)'
+          view.strokeText(label, x, y)
+          view.fillStyle = 'rgba(255, 246, 220, 0.95)'
+          view.fillText(label, x, y)
           view.textAlign = 'left'
         }
         view.globalAlpha = 1
@@ -817,7 +852,7 @@ export function bananaPage(): string {
         view.drawImage(wood, 0, 0)
         for (const ghost of ghosts) drawBanana(ghost.cells, ghost.ripe, 0.45, ghost.name)
         if (game.food) drawFood(game.food, time)
-        drawBanana(smoothCells(), game.ripeness, 1, '')
+        drawBanana(smoothCells(), game.ripeness, 1, myName)
       }
 
       function frame(now) {
@@ -905,10 +940,26 @@ export function bananaPage(): string {
         const others = ghosts.length
         roomEl.textContent =
           others === 0
-            ? 'Just you on the counter. Open this page in another window to play side by side.'
+            ? 'Nobody else on the counter right now. Open this page on another device, or send the link above, to play side by side.'
             : others +
               (others === 1 ? ' other banana' : ' other bananas') +
               ' on the counter right now.'
+      }
+
+      // The link other people open to join the same counter: this machine's network address plus the path of this page.
+      if (LAN_ADDRESS) {
+        const port = location.port ? ':' + location.port : ''
+        const link = document.createElement('a')
+        link.href = 'http://' + LAN_ADDRESS + port + location.pathname
+        link.textContent = link.href
+        joinEl.append(
+          'Others can join at ',
+          link,
+          LOCAL_ONLY
+            ? ' once the app is started on the network (ACRYLBLENDS_HOST=0.0.0.0).'
+            : ' - send them the link.',
+        )
+        joinEl.hidden = false
       }
 
       function connectRoom() {
