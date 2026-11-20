@@ -75,7 +75,7 @@ export function bananaPage(): string {
         <canvas id="banana-canvas" width="480" height="480" aria-label="The banana game board"></canvas>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
-          <p id="banana-overlay-text">Arrows, WASD or swipe. Every fruit you eat ripens you a little. Frost cools you down.</p>
+          <p id="banana-overlay-text">Arrows, WASD or swipe. The banana wraps around the counter, so only its own body and the ripening can stop it.</p>
           <button id="banana-start" type="button">Start</button>
           <form id="banana-save" hidden>
             <input id="banana-name" maxlength="16" placeholder="Your name" autocomplete="nickname" required>
@@ -245,10 +245,9 @@ export function bananaPage(): string {
       function step() {
         if (!game.running) return
         if (game.queue.length) game.dir = game.queue.shift()
-        const head = { x: game.snake[0].x + game.dir.x, y: game.snake[0].y + game.dir.y }
-        if (head.x < 0 || head.y < 0 || head.x >= COLS || head.y >= ROWS) {
-          finish('Crash!', 'You ran into the edge of the counter.')
-          return
+        const head = {
+          x: (game.snake[0].x + game.dir.x + COLS) % COLS,
+          y: (game.snake[0].y + game.dir.y + ROWS) % ROWS,
         }
         for (const part of game.snake) {
           if (part.x === head.x && part.y === head.y) {
@@ -338,22 +337,27 @@ export function bananaPage(): string {
         return true
       }
 
-      /** Points along the body every few pixels, each with the normal of the peel there and how far along it sits (0 tail, 1 head). */
-      function ribbonPoints(points, step) {
+      /**
+       * Points along one run of the body every few pixels, each with the normal of the peel there and how far along the whole
+       * banana it sits (0 stem, 1 tip). The banana is drawn in runs because it wraps: the part that left one edge is not joined
+       * to the part that came back on the other.
+       */
+      function ribbonPoints(points, step, start, total) {
         const out = []
+        const span = total > 0 ? total : 1
         if (points.length === 0) return out
         if (points.length === 1) {
-          out.push({ x: points[0].x, y: points[0].y, nx: 0, ny: -1, t: 0.5 })
+          out.push({ x: points[0].x, y: points[0].y, nx: 0, ny: -1, t: Math.min(1, start / span) })
           return out
         }
         const lengths = []
-        let total = 0
+        let runLength = 0
         for (let i = 1; i < points.length; i += 1) {
           const d = Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y)
           lengths.push(d)
-          total += d
+          runLength += d
         }
-        if (total === 0) total = 1
+        if (runLength === 0) runLength = 0.001
         let walked = 0
         for (let i = 1; i < points.length; i += 1) {
           const a = points[i - 1]
@@ -363,7 +367,13 @@ export function bananaPage(): string {
           const ux = (b.x - a.x) / seg
           const uy = (b.y - a.y) / seg
           for (let d = 0; d < seg; d += step) {
-            out.push({ x: a.x + ux * d, y: a.y + uy * d, nx: -uy, ny: ux, t: (walked + d) / total })
+            out.push({
+              x: a.x + ux * d,
+              y: a.y + uy * d,
+              nx: -uy,
+              ny: ux,
+              t: Math.min(1, (start + walked + d) / span),
+            })
           }
           walked += seg
         }
@@ -372,14 +382,46 @@ export function bananaPage(): string {
         const lx = last.x - prev.x
         const ly = last.y - prev.y
         const ll = Math.hypot(lx, ly) || 1
-        out.push({ x: last.x, y: last.y, nx: -ly / ll, ny: lx / ll, t: 1 })
+        out.push({
+          x: last.x,
+          y: last.y,
+          nx: -ly / ll,
+          ny: lx / ll,
+          t: Math.min(1, (start + runLength) / span),
+        })
         return out
+      }
+
+      /** The body split where it left one edge and came back on the other, so a wrap never draws a line across the counter. */
+      function bodyRuns(points) {
+        const runs = []
+        let run = [points[0]]
+        for (let i = 1; i < points.length; i += 1) {
+          const a = points[i - 1]
+          const b = points[i]
+          if (Math.abs(a.x - b.x) > CELL * 1.5 || Math.abs(a.y - b.y) > CELL * 1.5) {
+            runs.push(run)
+            run = [b]
+          } else {
+            run.push(b)
+          }
+        }
+        runs.push(run)
+        return runs
+      }
+
+      function runLength(run) {
+        let total = 0
+        for (let i = 1; i < run.length; i += 1) {
+          total += Math.hypot(run[i].x - run[i - 1].x, run[i].y - run[i - 1].y)
+        }
+        return total
       }
 
       /** A banana is thin at the stem, thick in the middle and thin at the tip. */
       function radiusAt(t) {
         const tuck = Math.max(0, Math.min(1, t))
-        return 4.6 + 6.4 * Math.sin(Math.PI * Math.pow(tuck, 0.85))
+        return 4.6 + 6.6 * Math.sin(Math.PI * Math.pow(tuck, 0.85))
       }
 
       function drawBanana() {
@@ -388,108 +430,168 @@ export function bananaPage(): string {
         const points = []
         for (const part of parts) points.push({ x: part.x * CELL + CELL / 2, y: part.y * CELL + CELL / 2 })
         points.reverse()
-        const samples = ribbonPoints(points, 5)
+        const runs = bodyRuns(points)
+        let total = 0
+        for (const run of runs) total += runLength(run)
+        if (total < 1) total = 1
+
+        const samples = []
+        const ridgeLight = []
+        const ridgeShade = []
+        let walked = 0
+        for (const run of runs) {
+          const runSamples = ribbonPoints(run, 4, walked, total)
+          const lit = []
+          const shaded = []
+          for (const sample of runSamples) {
+            samples.push(sample)
+            const r = radiusAt(sample.t)
+            lit.push({ x: sample.x + sample.nx * r * 0.6, y: sample.y + sample.ny * r * 0.6 })
+            shaded.push({ x: sample.x - sample.nx * r * 0.78, y: sample.y - sample.ny * r * 0.78 })
+          }
+          ridgeLight.push(lit)
+          ridgeShade.push(shaded)
+          walked += runLength(run)
+        }
+
         const ripe = game.ripeness
-        const base = bananaColor(ripe)
-        const dark = bananaColor(ripe, -13, -8)
-        const light = bananaColor(ripe, 13, 4)
+        const shine = bananaColor(Math.min(100, ripe + 8), 14, 2)
 
         view.save()
-        view.shadowColor = 'rgba(0, 0, 0, 0.5)'
-        view.shadowBlur = 11
+        view.shadowColor = 'rgba(0, 0, 0, 0.55)'
+        view.shadowBlur = 12
         view.shadowOffsetX = 4
-        view.shadowOffsetY = 7
-        view.strokeStyle = 'rgba(28, 17, 6, 0.5)'
-        view.lineWidth = 17
+        view.shadowOffsetY = 8
+        view.strokeStyle = 'rgba(26, 15, 5, 0.5)'
+        view.lineWidth = 16
         view.lineCap = 'round'
         view.lineJoin = 'round'
-        if (smoothPath(points)) view.stroke()
+        for (const run of runs) {
+          if (smoothPath(run)) view.stroke()
+        }
         view.restore()
 
-        view.fillStyle = dark
+        // Every part of the peel has its own ripeness: greener at the stem, riper toward the tip, as a real banana does.
+        const bases = []
+        const edges = []
         for (const sample of samples) {
+          const local = Math.max(0, Math.min(100, ripe - (1 - sample.t) * 15))
+          bases.push(bananaColor(local))
+          edges.push(bananaColor(local, -15, -9))
+        }
+
+        for (let i = 0; i < samples.length; i += 1) {
+          view.fillStyle = edges[i]
           view.beginPath()
-          view.arc(sample.x, sample.y, radiusAt(sample.t) + 1.1, 0, Math.PI * 2)
+          view.arc(samples[i].x, samples[i].y, radiusAt(samples[i].t) + 1.2, 0, Math.PI * 2)
           view.fill()
         }
-        view.fillStyle = base
-        for (const sample of samples) {
+        for (let i = 0; i < samples.length; i += 1) {
+          view.fillStyle = bases[i]
           view.beginPath()
-          view.arc(sample.x, sample.y, radiusAt(sample.t), 0, Math.PI * 2)
+          view.arc(samples[i].x, samples[i].y, radiusAt(samples[i].t), 0, Math.PI * 2)
           view.fill()
         }
 
-        view.globalAlpha = 0.5
-        view.fillStyle = light
+        view.globalAlpha = 0.4
+        view.fillStyle = shine
         for (const sample of samples) {
           const r = radiusAt(sample.t)
           view.beginPath()
-          view.arc(sample.x + sample.nx * r * 0.32, sample.y + sample.ny * r * 0.32, r * 0.52, 0, Math.PI * 2)
-          view.fill()
-        }
-
-        view.globalAlpha = 0.3
-        view.fillStyle = '#fff6d8'
-        for (const sample of samples) {
-          const r = radiusAt(sample.t)
-          view.beginPath()
-          view.arc(sample.x + sample.nx * r * 0.5, sample.y + sample.ny * r * 0.5, r * 0.16, 0, Math.PI * 2)
+          view.arc(sample.x + sample.nx * r * 0.36, sample.y + sample.ny * r * 0.36, r * 0.54, 0, Math.PI * 2)
           view.fill()
         }
         view.globalAlpha = 1
 
-        if (ripe > 26) {
-          const strength = Math.min(1, (ripe - 26) / 62)
-          view.fillStyle = 'rgba(74, 45, 12, ' + (0.2 + strength * 0.45).toFixed(3) + ')'
-          for (let i = 3; i < samples.length; i += 6) {
+        // The two long ridges a banana has, one lit and one in shade, so the peel reads as round.
+        view.lineCap = 'round'
+        view.globalAlpha = 0.5
+        view.strokeStyle = shine
+        view.lineWidth = 1.1
+        for (const ridge of ridgeLight) {
+          if (ridge.length > 1 && smoothPath(ridge)) view.stroke()
+        }
+        view.globalAlpha = 0.22
+        view.strokeStyle = '#2a1a06'
+        view.lineWidth = 1.6
+        for (const ridge of ridgeShade) {
+          if (ridge.length > 1 && smoothPath(ridge)) view.stroke()
+        }
+        view.globalAlpha = 1
+
+        if (ripe > 24) {
+          const strength = Math.min(1, (ripe - 24) / 62)
+          for (let i = 2; i < samples.length; i += 5) {
             const sample = samples[i]
             const r = radiusAt(sample.t)
-            const spot = noise(i * 7.3)
-            const side = noise(i * 3.1) > 0.5 ? 1 : -1
-            const px = sample.x + sample.nx * r * 0.45 * side * (0.4 + spot)
-            const py = sample.y + sample.ny * r * 0.45 * side * (0.4 + spot)
+            const spot = noise(i * 7.31)
+            const size = noise(i * 2.17)
+            if (spot > 0.35 + (1 - strength) * 0.5) continue
+            const side = noise(i * 5.53) > 0.5 ? 1 : -1
+            const spread = 0.15 + size * 0.45
+            view.fillStyle = 'rgba(74, 45, 12, ' + (0.22 + strength * 0.5).toFixed(3) + ')'
             view.beginPath()
-            view.ellipse(px, py, r * 0.22, r * 0.15, spot * 3, 0, Math.PI * 2)
+            view.ellipse(
+              sample.x + sample.nx * r * spread * side,
+              sample.y + sample.ny * r * spread * side,
+              r * (0.13 + size * 0.14),
+              r * (0.09 + size * 0.1),
+              spot * 3.1,
+              0,
+              Math.PI * 2,
+            )
             view.fill()
           }
         }
 
-        const tail = points[0]
-        const tailNext = points[1] || points[0]
+        // The stem: a short stalk with a pale cut end, at the tail of the banana.
+        const tailRun = runs[0]
+        const tail = tailRun[0]
+        const tailNext = tailRun[1] || tail
         const tx = tail.x - tailNext.x
         const ty = tail.y - tailNext.y
         const tl = Math.hypot(tx, ty) || 1
-        view.strokeStyle = '#6b5426'
-        view.lineWidth = 3.2
+        const sx = tx / tl
+        const sy = ty / tl
+        view.strokeStyle = '#71592a'
+        view.lineWidth = 4.2
         view.lineCap = 'round'
         view.beginPath()
         view.moveTo(tail.x, tail.y)
-        view.lineTo(tail.x + (tx / tl) * 9, tail.y + (ty / tl) * 9)
+        view.lineTo(tail.x + sx * 8, tail.y + sy * 8)
         view.stroke()
+        view.fillStyle = '#c9b37a'
+        view.beginPath()
+        view.ellipse(tail.x + sx * 9.5, tail.y + sy * 9.5, 2.4, 1.6, Math.atan2(sy, sx), 0, Math.PI * 2)
+        view.fill()
 
         const head = samples[samples.length - 1]
         const ux = head.ny
         const uy = -head.nx
         const angle = Math.atan2(uy, ux)
-        view.fillStyle = '#4a3312'
+        view.fillStyle = '#3f2b0f'
         view.beginPath()
-        view.ellipse(head.x + ux * 2.8, head.y + uy * 2.8, 2.9, 2.2, angle, 0, Math.PI * 2)
+        view.ellipse(head.x + ux * 3.2, head.y + uy * 3.2, 3.1, 2.2, angle, 0, Math.PI * 2)
+        view.fill()
+        view.fillStyle = 'rgba(255, 240, 200, 0.5)'
+        view.beginPath()
+        view.arc(head.x + ux * 4.6, head.y + uy * 4.6, 0.9, 0, Math.PI * 2)
         view.fill()
 
         for (const side of [-1, 1]) {
-          const ex = head.x + head.nx * 2.9 * side - ux * 1.4
-          const ey = head.y + head.ny * 2.9 * side - uy * 1.4
+          const ex = head.x + head.nx * 2.9 * side - ux * 1.6
+          const ey = head.y + head.ny * 2.9 * side - uy * 1.6
           view.fillStyle = '#ffffff'
           view.beginPath()
-          view.ellipse(ex, ey, 2.4, 2.1, angle, 0, Math.PI * 2)
+          view.ellipse(ex, ey, 2.3, 2, angle, 0, Math.PI * 2)
           view.fill()
           view.fillStyle = '#20180c'
           view.beginPath()
-          view.arc(ex + ux * 0.8, ey + uy * 0.8, 1.2, 0, Math.PI * 2)
+          view.arc(ex + ux * 0.8, ey + uy * 0.8, 1.15, 0, Math.PI * 2)
           view.fill()
           view.fillStyle = 'rgba(255,255,255,0.9)'
           view.beginPath()
-          view.arc(ex + ux * 0.8 - 0.5, ey + uy * 0.8 - 0.6, 0.45, 0, Math.PI * 2)
+          view.arc(ex + ux * 0.8 - 0.45, ey + uy * 0.8 - 0.55, 0.42, 0, Math.PI * 2)
           view.fill()
         }
       }
