@@ -60,7 +60,7 @@
     {
       "name": "banana",
       "origin": "local",
-      "digest": "sha256:c9885abd03ef3deb23faf1736be209c766f3fb56ea7827bb7fbf75e4e708e086",
+      "digest": "sha256:3e47cc55fd531c0f7895314b304547d945a4e329c867c228556767d79bef4e9c",
       "source": "plugins/banana"
     },
     {

@@ -107,6 +107,57 @@ test('puts the game on the home page as a widget, and it leaves with the plugin'
     assert.match(await home(), /<strong>77<\/strong> by Ada/)
   }))
 
+test('the shared counter takes a banana and hands the room to a reader', () =>
+  withApp(async (app) => {
+    const state = (body: unknown) =>
+      app.root.router.request('/banana/room/state', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+    assert.equal(
+      (
+        await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[3, 4], [2, 4]] })
+      ).status,
+      204,
+    )
+    assert.equal(
+      (await state({ id: 'peer-one', name: '', score: 30, ripe: 40, cells: [] })).status,
+      400,
+    )
+    assert.equal(
+      (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[99, 4]] })).status,
+      400,
+    )
+
+    const stream = await app.root.router.request('/banana/room/events?id=reader-one')
+    assert.equal(stream.status, 200)
+    assert.match(stream.headers.get('content-type') ?? '', /text\/event-stream/)
+    const reader = stream.body?.getReader()
+    assert.ok(reader, 'the room answers a body')
+    const decoder = new TextDecoder()
+    let text = ''
+    try {
+      for (let round = 0; round < 20 && !text.includes('peer-one'); round += 1) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const chunk = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('the room sent nothing in 3 seconds')), 3000)
+          }),
+        ]).finally(() => clearTimeout(timer))
+        if (chunk.done) break
+        text += decoder.decode(chunk.value, { stream: true })
+      }
+    } finally {
+      await reader.cancel()
+    }
+    assert.match(text, /event: hello/)
+    assert.match(text, /"peer-one"/)
+    assert.match(text, /"Ada"/)
+  }))
+
 test('keeps the board in a file across a restart', async () => {
   const home = await mkdtemp(join(scratch, 'banana-test-'))
   try {

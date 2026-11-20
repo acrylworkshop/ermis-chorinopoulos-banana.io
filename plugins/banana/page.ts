@@ -25,6 +25,7 @@ export function bananaPage(): string {
       .hud div{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:8px 10px;text-align:center}
       .label{display:block;color:var(--dim);font-size:.68rem;text-transform:uppercase;letter-spacing:.14em}
       .hud strong{font-size:1.35rem;font-variant-numeric:tabular-nums}
+      .room{margin:0 0 10px;text-align:center;color:var(--dim);font-size:.8rem}
       .ripeness{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:10px 12px;margin-bottom:12px}
       .ripeness-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
       .bar{height:10px;border-radius:999px;background:#120d08;overflow:hidden;border:1px solid var(--edge)}
@@ -66,6 +67,7 @@ export function bananaPage(): string {
         <div><span class="label">Length</span><strong id="banana-length">3</strong></div>
         <div><span class="label">Best</span><strong id="banana-best">-</strong></div>
       </section>
+      <p class="room" id="banana-room">Open this page in another window to play side by side.</p>
       <section class="ripeness" aria-label="Ripeness">
         <div class="ripeness-head"><span class="label">Ripeness</span><span id="banana-ripeness">0%</span></div>
         <div class="bar"><div id="banana-fill"></div></div>
@@ -75,7 +77,7 @@ export function bananaPage(): string {
         <canvas id="banana-canvas" width="640" height="640" aria-label="The banana game board"></canvas>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
-          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter and ripens on its own, then moulds over. Frost buys you time.</p>
+          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, then moulds over. Other players on this counter show up live.</p>
           <button id="banana-start" type="button">Start</button>
           <form id="banana-save" hidden>
             <input id="banana-name" maxlength="16" placeholder="Your name" autocomplete="nickname" required>
@@ -124,6 +126,8 @@ export function bananaPage(): string {
 
       const game = {
         snake: [],
+        prev: [],
+        alpha: 0,
         dir: { x: 1, y: 0 },
         queue: [],
         food: null,
@@ -168,11 +172,17 @@ export function bananaPage(): string {
       }
 
       function reset() {
+        // A full banana at the start, not a stub: the game begins with something you can see and steer.
         game.snake = [
+          { x: 6, y: 10 },
           { x: 5, y: 10 },
           { x: 4, y: 10 },
           { x: 3, y: 10 },
+          { x: 2, y: 10 },
+          { x: 1, y: 10 },
         ]
+        game.prev = game.snake.slice()
+        game.alpha = 0
         game.dir = { x: 1, y: 0 }
         game.queue = []
         game.ripeness = 0
@@ -250,6 +260,8 @@ export function bananaPage(): string {
       function step() {
         if (!game.running) return
         if (game.queue.length) game.dir = game.queue.shift()
+        // Remember where every cell was, so the drawing can slide it toward where it is now.
+        game.prev = game.snake.slice()
         const head = {
           x: (game.snake[0].x + game.dir.x + COLS) % COLS,
           y: (game.snake[0].y + game.dir.y + ROWS) % ROWS,
@@ -429,11 +441,11 @@ export function bananaPage(): string {
         return CELL * (0.2 + 0.29 * Math.sin(Math.PI * Math.pow(tuck, 0.85)))
       }
 
-      function drawBanana() {
-        const parts = game.snake
-        if (!parts.length) return
+      function drawBanana(cells, ripe, alpha, label) {
+        if (!cells.length) return
+        view.globalAlpha = alpha
         const points = []
-        for (const part of parts) points.push({ x: part.x * CELL + CELL / 2, y: part.y * CELL + CELL / 2 })
+        for (const cell of cells) points.push({ x: cell.x * CELL + CELL / 2, y: cell.y * CELL + CELL / 2 })
         points.reverse()
         const runs = bodyRuns(points)
         let total = 0
@@ -459,7 +471,6 @@ export function bananaPage(): string {
           walked += runLength(run)
         }
 
-        const ripe = game.ripeness
         const shine = bananaColor(Math.min(100, ripe + 8), 14, 2)
         // Rot begins before the end, so the mould is visible for the last part of a run.
         const rot = Math.max(0, Math.min(1, (ripe - 60) / 40))
@@ -500,7 +511,7 @@ export function bananaPage(): string {
           view.fill()
         }
 
-        view.globalAlpha = 0.4 * (1 - rot * 0.75)
+        view.globalAlpha = alpha * 0.4 * (1 - rot * 0.75)
         view.fillStyle = shine
         for (const sample of samples) {
           const r = radiusAt(sample.t)
@@ -508,23 +519,23 @@ export function bananaPage(): string {
           view.arc(sample.x + sample.nx * r * 0.36, sample.y + sample.ny * r * 0.36, r * 0.54, 0, Math.PI * 2)
           view.fill()
         }
-        view.globalAlpha = 1
+        view.globalAlpha = alpha
 
         // The two long ridges a banana has, one lit and one in shade, so the peel reads as round.
         view.lineCap = 'round'
-        view.globalAlpha = 0.5
+        view.globalAlpha = alpha * 0.5
         view.strokeStyle = shine
         view.lineWidth = 1.1 * UNIT
         for (const ridge of ridgeLight) {
           if (ridge.length > 1 && smoothPath(ridge)) view.stroke()
         }
-        view.globalAlpha = 0.22
+        view.globalAlpha = alpha * 0.22
         view.strokeStyle = '#2a1a06'
         view.lineWidth = 1.6 * UNIT
         for (const ridge of ridgeShade) {
           if (ridge.length > 1 && smoothPath(ridge)) view.stroke()
         }
-        view.globalAlpha = 1
+        view.globalAlpha = alpha
 
         if (ripe > 24) {
           const strength = Math.min(1, (ripe - 24) / 62)
@@ -673,6 +684,15 @@ export function bananaPage(): string {
           view.arc(ex + ux * 0.8 * UNIT - 0.45 * UNIT, ey + uy * 0.8 * UNIT - 0.55 * UNIT, 0.42 * UNIT, 0, Math.PI * 2)
           view.fill()
         }
+
+        if (label) {
+          view.fillStyle = 'rgba(255, 244, 214, 0.85)'
+          view.font = Math.round(10 * UNIT) + 'px system-ui, -apple-system, sans-serif'
+          view.textAlign = 'center'
+          view.fillText(label, head.x, head.y - 13 * UNIT)
+          view.textAlign = 'left'
+        }
+        view.globalAlpha = 1
       }
 
       function drawFood(food, time) {
@@ -774,17 +794,38 @@ export function bananaPage(): string {
         view.fill()
       }
 
+      /** The banana's cells slid between the last two steps, so it glides instead of jumping from cell to cell. */
+      function smoothCells() {
+        const current = game.snake
+        const before = game.prev
+        const blend = game.alpha
+        const out = []
+        for (let i = 0; i < current.length; i += 1) {
+          const to = current[i]
+          const from = before[i]
+          // A cell that jumped across an edge is not slid, or it would cut across the counter.
+          if (!from || Math.abs(from.x - to.x) > 1.5 || Math.abs(from.y - to.y) > 1.5) {
+            out.push({ x: to.x, y: to.y })
+          } else {
+            out.push({ x: from.x + (to.x - from.x) * blend, y: from.y + (to.y - from.y) * blend })
+          }
+        }
+        return out
+      }
+
       function draw(time) {
         view.drawImage(wood, 0, 0)
+        for (const ghost of ghosts) drawBanana(ghost.cells, ghost.ripe, 0.45, ghost.name)
         if (game.food) drawFood(game.food, time)
-        drawBanana()
+        drawBanana(smoothCells(), game.ripeness, 1, '')
       }
 
       function frame(now) {
         const dt = game.last ? Math.min(120, now - game.last) : 0
         game.last = now
         if (game.running) {
-          game.ripeness = Math.min(100, game.ripeness + dt * 0.0014)
+          // A banana that eats nothing lasts about five minutes before it rots.
+          game.ripeness = Math.min(100, game.ripeness + dt * 0.00035)
           game.acc += dt
           const tick = tickFor()
           while (game.acc >= tick && game.running) {
@@ -794,6 +835,7 @@ export function bananaPage(): string {
           if (game.running && game.ripeness >= 100) {
             finish('Rotten!', 'The mould took the whole banana.')
           }
+          game.alpha = game.running ? Math.min(0.999, game.acc / tick) : 1
           hud()
         }
         draw(now)
@@ -831,6 +873,85 @@ export function bananaPage(): string {
           // Offline, or the plugin is off: keep what the page already shows.
         }
       }
+
+      // The shared counter: this page draws every other banana on it, and pushes its own to /banana/room/state.
+      const roomEl = document.getElementById('banana-room')
+      const me = 'p' + Math.random().toString(36).slice(2, 10)
+      let roomState = []
+      let ghosts = []
+      let myName = 'Guest ' + me.slice(-3)
+
+      function buildGhosts() {
+        const out = []
+        for (const peer of roomState) {
+          if (!peer || peer.id === me || !Array.isArray(peer.cells)) continue
+          const cells = []
+          for (const cell of peer.cells) {
+            if (!Array.isArray(cell) || cell.length !== 2) continue
+            cells.push({ x: cell[0], y: cell[1] })
+          }
+          if (cells.length === 0) continue
+          out.push({
+            cells: cells,
+            ripe: typeof peer.ripe === 'number' ? peer.ripe : 0,
+            name: typeof peer.name === 'string' ? peer.name.slice(0, 16) : 'Banana',
+          })
+        }
+        return out
+      }
+
+      function showRoom() {
+        ghosts = buildGhosts()
+        const others = ghosts.length
+        roomEl.textContent =
+          others === 0
+            ? 'Just you on the counter. Open this page in another window to play side by side.'
+            : others +
+              (others === 1 ? ' other banana' : ' other bananas') +
+              ' on the counter right now.'
+      }
+
+      function connectRoom() {
+        if (typeof EventSource !== 'function') return
+        try {
+          const source = new EventSource('/banana/room/events?id=' + encodeURIComponent(me))
+          source.addEventListener('room', (event) => {
+            try {
+              const data = JSON.parse(event.data)
+              roomState = Array.isArray(data.peers) ? data.peers : []
+            } catch (error) {
+              // A message this page cannot read: keep the room it already had.
+            }
+            showRoom()
+          })
+        } catch (error) {
+          // No live room: the game still plays, alone.
+        }
+      }
+
+      async function sendState() {
+        if (!game.running) return
+        const cells = []
+        for (const part of game.snake) cells.push([part.x, part.y])
+        try {
+          await fetch('/banana/room/state', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: me,
+              name: myName,
+              score: game.score,
+              ripe: game.ripeness,
+              cells: cells,
+            }),
+          })
+        } catch (error) {
+          // Offline, or the plugin is off: the game still plays, alone.
+        }
+      }
+
+      setInterval(sendState, 130)
+      connectRoom()
 
       const KEYS = {
         ArrowUp: [0, -1],
@@ -906,6 +1027,7 @@ export function bananaPage(): string {
           if (!response.ok) throw new Error('refused')
           const data = await response.json()
           renderBoard(data.scores)
+          myName = name
           savedEl.textContent = 'Saved. You are on the board.'
         } catch (error) {
           savedEl.textContent = 'The score could not be saved.'
