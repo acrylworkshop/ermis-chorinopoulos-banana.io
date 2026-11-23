@@ -91,7 +91,7 @@ export function bananaPage(options: BananaPageOptions): string {
         <canvas id="banana-canvas" width="900" height="900" aria-label="The banana game board"></canvas>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
-          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, then moulds over. Other players on this counter show up live, with their names above them.</p>
+          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, and eating makes it fresh again before it moulds over. Other players on this counter show up live, with their names above them.</p>
           <input id="banana-nick" maxlength="16" placeholder="Your name" autocomplete="nickname" aria-label="Your name">
           <button id="banana-start" type="button">Start</button>
           <form id="banana-save" hidden>
@@ -112,7 +112,7 @@ export function bananaPage(options: BananaPageOptions): string {
         <h2>Top bananas</h2>
         <ol id="banana-board"><li>No scores yet.</li></ol>
       </section>
-      <p class="legend">Grape +10 points, a little riper. Sugar +25 points, a lot riper. Frost -28 ripeness, no growth.</p>
+      <p class="legend">Eating makes the banana fresher. Grape +10 points, -8 ripeness. Sugar +25 points, -15 ripeness. Frost +5 points, -28 ripeness, no growth.</p>
     </main>
     <script type="module">
       const canvas = document.getElementById('banana-canvas')

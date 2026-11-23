@@ -74,7 +74,7 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
             const [food] = foods.splice(index, 1)
             const multiplier = p.ripe >= 25 && p.ripe <= 60 ? 2 : 1
             if (food.kind === 'ice') { p.score += 5 * multiplier; p.ripe = Math.max(0, p.ripe - 28); p.cells.pop() }
-            else { p.score += (food.kind === 'sugar' ? 25 : 10) * multiplier; p.ripe = Math.min(100, p.ripe + (food.kind === 'sugar' ? 13 : 5)); if (p.cells.length > 200) p.cells.pop() }
+            else { p.score += (food.kind === 'sugar' ? 25 : 10) * multiplier; p.ripe = Math.max(0, p.ripe - (food.kind === 'sugar' ? 15 : 8)); if (p.cells.length > 200) p.cells.pop() }
           }
           if (p.ripe >= 100) reason = 'Rotten!'
         }

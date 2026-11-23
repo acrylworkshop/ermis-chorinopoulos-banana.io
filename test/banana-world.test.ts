@@ -22,7 +22,10 @@ test('world restarts a player with the same public id, wraps, tangles and remove
 })
 
 test('a banana eventually rots without food', () => {
-  const world = createWorld({ random: () => 0 })
+  // The food lies on row 0 and the banana glides along row 15, so it never eats.
+  let roll = 0
+  const world = createWorld({ random: () => roll })
+  roll = 0.5
   world.join('secret', 'Ada')
   for (let i = 0; i < 3000 && world.count; i++) world.step()
   assert.equal(world.snapshot().ended[0].reason, 'Rotten!')
@@ -38,4 +41,33 @@ test('food never appears on a banana', () => {
     for (const food of foods) assert.ok(!cells.has(`${food.x},${food.y}`))
     world.step()
   }
+})
+
+test('grape and sugar make the banana fresher and never below 0', () => {
+  let roll = 0.5
+  const world = createWorld({ random: () => roll })
+  world.join('a', 'a')
+  const drop = { grape: 8, sugar: 15, ice: 28 }
+  const seen = new Set<string>()
+  // Two laps round every row of the board: right along a row, one down, right again. It meets every food and never itself.
+  for (let i = 0; i < 6000 && seen.size < 3; i++) {
+    roll = [0.5, 0.8, 0.95][Math.floor(i / 7) % 3] as number
+    world.turn('a', i % 30 === 29 ? 0 : 1, i % 30 === 29 ? 1 : 0)
+    const before = world.snapshot()
+    world.step()
+    const after = world.snapshot()
+    const me = after.players[0]
+    if (!me) {
+      world.join('a', 'a')
+      continue
+    }
+    const [x, y] = me.cells[0]!
+    const food = before.foods.find((f) => f.x === x && f.y === y)
+    if (!food) continue
+    const expected = Math.max(0, before.players[0]!.ripe + 0.042 - drop[food.kind])
+    assert.ok(Math.abs(me.ripe - expected) < 1e-6, `${food.kind}: ${before.players[0]!.ripe} -> ${me.ripe}`)
+    if (before.players[0]!.ripe > 0) seen.add(food.kind)
+  }
+  // Frost only appears on a ripe counter, which this well-fed banana never makes; its -28 is checked when it is met.
+  assert.ok(seen.has('grape') && seen.has('sugar'), [...seen].join())
 })
