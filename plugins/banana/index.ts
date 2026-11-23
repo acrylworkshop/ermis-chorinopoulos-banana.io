@@ -13,6 +13,7 @@ import { streamSSE } from '@acryldev/blends/streaming'
 import type {} from '@acryldev/instance'
 import type {} from '../home/index.ts'
 import { bananaPage } from './page.ts'
+import { createWorld, STEP_MS } from './world.ts'
 
 export const name = 'banana'
 export const inject = ['router', 'home', 'appInstance']
@@ -30,7 +31,6 @@ const TOP = 10
 const NAME_MAX = 16
 const SCORE_MAX = 1_000_000
 /** The shared counter: at most this many bananas at once, and one nobody has updated for this long has left. */
-const ROOM_SIZE = 24
 const ROOM_TTL = 4000
 /** The board every page draws on, so a cell another player sends lands where this page draws it. */
 const GRID = 30
@@ -112,48 +112,39 @@ function readScore(value: unknown): Score | undefined {
   return { name, score: row.score, at: Date.now() }
 }
 
-/** One banana another player is steering, as the shared counter knows it. */
-interface Peer {
-  readonly id: string
-  readonly name: string
-  readonly cells: readonly { readonly x: number; readonly y: number }[]
-  readonly score: number
-  readonly ripe: number
-  at: number
-}
+const KEY = /^[A-Za-z0-9_-]{16,64}$/
 
-const PEER_ID = /^[A-Za-z0-9_-]{4,40}$/
+type Snapshot = ReturnType<ReturnType<typeof createWorld>['snapshot']>
 
-/** One update from a page, or nothing when it is not something the counter can draw. */
-function readPeer(value: unknown): Peer | undefined {
-  if (typeof value !== 'object' || value === null) return undefined
-  const row = value as Record<string, unknown>
-  if (typeof row.id !== 'string' || !PEER_ID.test(row.id)) return undefined
-  if (typeof row.name !== 'string') return undefined
-  const name = row.name.trim().slice(0, NAME_MAX)
-  if (name.length < 1) return undefined
-  if (typeof row.score !== 'number' || !Number.isInteger(row.score)) return undefined
-  if (row.score < 0 || row.score > SCORE_MAX) return undefined
-  if (typeof row.ripe !== 'number' || !Number.isFinite(row.ripe)) return undefined
-  if (row.ripe < 0 || row.ripe > 100) return undefined
-  if (!Array.isArray(row.cells) || row.cells.length > 200) return undefined
-  const cells: { x: number; y: number }[] = []
-  for (const cell of row.cells) {
-    if (!Array.isArray(cell) || cell.length !== 2) return undefined
-    const [x, y] = cell as [unknown, unknown]
-    if (typeof x !== 'number' || typeof y !== 'number') return undefined
-    if (!Number.isInteger(x) || !Number.isInteger(y)) return undefined
-    if (x < 0 || y < 0 || x >= GRID || y >= GRID) return undefined
-    cells.push({ x, y })
-  }
-  return { id: row.id, name, cells, score: row.score, ripe: row.ripe, at: Date.now() }
+export function mergeSnapshots(previous: Snapshot | undefined, next: Snapshot): Snapshot {
+  return previous ? { ...next, ended: [...previous.ended, ...next.ended] } : next
 }
 
 export function apply(ctx: Context): void {
   const file = join(ctx.appInstance.home, 'banana.json')
   let scores = readScores(file)
-  /** Who is on the counter right now. It is a live room, so it starts empty at every reload and is never written. */
-  const peers = new Map<string, Peer>()
+  const world = createWorld()
+  const streams = new Map<string, Set<(snapshot?: ReturnType<typeof world.snapshot>) => void>>()
+  const expiry = new Map<string, ReturnType<typeof setTimeout>>()
+  let timer: ReturnType<typeof setInterval> | undefined
+  const stopIfEmpty = () => { if (!world.count && timer) { clearInterval(timer); timer = undefined } }
+  const startTimer = () => {
+    if (!timer) {
+      timer = setInterval(() => {
+        world.step()
+        const snapshot = world.snapshot()
+        for (const group of streams.values()) for (const send of group) send(snapshot)
+        stopIfEmpty()
+      }, STEP_MS)
+      timer.unref()
+    }
+  }
+  ctx.effect(() => () => {
+    if (timer) clearInterval(timer)
+    for (const timeout of expiry.values()) clearTimeout(timeout)
+    for (const group of streams.values()) for (const close of group) close()
+    streams.clear()
+  })
 
   const save = (): void => {
     mkdirSync(ctx.appInstance.home, { recursive: true })
@@ -188,63 +179,69 @@ export function apply(ctx: Context): void {
       const rank = scores.indexOf(score) + 1
       return c.json({ scores: board(), rank: rank <= TOP ? rank : null }, 201)
     })
-    // The shared counter: a page listens here for every other banana, and pushes its own through /room/state.
     .get('/room/events', (c) => {
-      const id = (c.req.query('id') ?? '').trim()
-      if (!PEER_ID.test(id))
-        return c.json(
-          { error: 'the counter needs an id of 4 to 40 letters, digits, dashes or underscores' },
-          400,
-        )
+      const key = c.req.query('key') ?? ''
+      if (!KEY.test(key)) return c.json({ error: 'invalid key' }, 400)
       return streamSSE(c, async (stream) => {
-        const leave = (): void => {
-          peers.delete(id)
+        let resolve: (() => void) | undefined
+        let pending: Snapshot | undefined
+        let closed = false
+        const send = (snapshot?: ReturnType<typeof world.snapshot>) => {
+          if (snapshot) pending = mergeSnapshots(pending, snapshot)
+          else closed = true
+          resolve?.()
         }
-        stream.onAbort(leave)
+        const group = streams.get(key) ?? new Set<typeof send>()
+        group.add(send)
+        streams.set(key, group)
+        const timeout = expiry.get(key)
+        if (timeout) clearTimeout(timeout)
+        expiry.delete(key)
+        const close = () => {
+          if (closed) return
+          closed = true
+          group.delete(send)
+          if (!group.size) { streams.delete(key); world.leave(key) }
+          resolve?.()
+        }
+        stream.onAbort(close)
         try {
-          await stream.writeSSE({ event: 'hello', data: JSON.stringify({ id }) })
-          while (!stream.aborted) {
-            const now = Date.now()
-            for (const [key, peer] of peers) if (now - peer.at > ROOM_TTL) peers.delete(key)
-            await stream.writeSSE({
-              event: 'room',
-              data: JSON.stringify({
-                peers: [...peers.values()].map((peer) => ({
-                  id: peer.id,
-                  name: peer.name,
-                  score: peer.score,
-                  ripe: Math.round(peer.ripe),
-                  cells: peer.cells.map((cell) => [cell.x, cell.y]),
-                })),
-              }),
-            })
-            await stream.sleep(120)
+          await stream.writeSSE({ event: 'hello', data: '{}' })
+          await stream.writeSSE({ event: 'room', data: JSON.stringify(world.snapshot()) })
+          while (!closed && !stream.aborted) {
+            if (!pending) await new Promise<void>(r => { resolve = r })
+            resolve = undefined
+            if (pending && !closed) {
+              const snapshot = pending
+              pending = undefined
+              await stream.writeSSE({ event: 'room', data: JSON.stringify(snapshot) })
+            }
           }
-        } finally {
-          leave()
-        }
+        } finally { close() }
       })
     })
-    .post('/room/state', async (c) => {
+    .post('/room/join', async (c) => {
       let body: unknown
-      try {
-        body = await c.req.json()
-      } catch {
-        return c.json({ error: 'invalid json' }, 400)
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
+      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key) || !('name' in body) || typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > NAME_MAX) return c.json({ error: 'invalid body' }, 400)
+      const id = world.join(body.key, body.name.trim())
+      if (!id) return c.json({ error: 'the counter is full' }, 429)
+      const previous = expiry.get(body.key)
+      if (previous) clearTimeout(previous)
+      if (!streams.has(body.key)) {
+        const key = body.key
+        const timeout = setTimeout(() => { expiry.delete(key); world.leave(key) }, ROOM_TTL)
+        timeout.unref()
+        expiry.set(key, timeout)
       }
-      const peer = readPeer(body)
-      if (!peer)
-        return c.json(
-          {
-            error:
-              `a banana needs an id, a name, a score, a ripeness from 0 to 100 and its cells on a ${GRID} by ${GRID} board`,
-          },
-          400,
-        )
-      if (!peers.has(peer.id) && peers.size >= ROOM_SIZE)
-        return c.json({ error: 'the counter is full right now, try again in a moment' }, 429)
-      peers.set(peer.id, peer)
-      return c.body(null, 204)
+      startTimer()
+      return c.json({ id, step: world.snapshot().step }, 201)
+    })
+    .post('/room/turn', async (c) => {
+      let body: unknown
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
+      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key) || !('x' in body) || !('y' in body) || typeof body.x !== 'number' || typeof body.y !== 'number' || !Number.isInteger(body.x) || !Number.isInteger(body.y) || Math.abs(body.x) + Math.abs(body.y) !== 1) return c.json({ error: 'invalid body' }, 400)
+      return world.turn(body.key, body.x, body.y) ? c.body(null, 204) : c.json({ error: 'not playing' }, 404)
     })
 
   ctx.router.route('/banana', app)

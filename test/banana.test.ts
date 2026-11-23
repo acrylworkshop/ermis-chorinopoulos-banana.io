@@ -6,6 +6,8 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { pinnedInstance, withPort } from '@acryldev/instance'
 import { type App, createApp } from '../src/app.ts'
+import { mergeSnapshots } from '../plugins/banana/index.ts'
+import { createWorld } from '../plugins/banana/world.ts'
 
 /** Throwaway homes live inside the project (`.acrylblends/` is ignored by git): a sandboxed agent may not write to the system temp folder. */
 const scratch = join(fileURLToPath(new URL('..', import.meta.url)), '.acrylblends', 'test')
@@ -55,10 +57,6 @@ test('serves the game page and an empty board', () =>
     assert.ok(html.includes('id="banana-canvas"'), 'the page carries the board')
     assert.ok(html.includes('const COLS = 30'), 'the board is 30 cells across')
     assert.ok(html.includes('id="banana-nick"'), 'the page asks for the name it shows above the banana')
-    assert.ok(
-      html.includes('drawBanana(smoothCells(), game.ripeness, 1, myName)'),
-      'every banana is drawn with its player’s name',
-    )
     assert.ok(html.includes('id="banana-join"'), 'the page has a line for the link others join with')
     assert.ok(html.includes("fetch('/banana/scores')"), 'the page asks its own route for the board')
     assert.deepEqual(await board(app), { scores: [] })
@@ -114,64 +112,41 @@ test('puts the game on the home page as a widget, and it leaves with the plugin'
     assert.match(await home(), /<strong>77<\/strong> by Ada/)
   }))
 
-test('the shared counter takes a banana and hands the room to a reader', () =>
+test('the room validates requests and broadcasts the same world', () =>
   withApp(async (app) => {
-    const state = (body: unknown) =>
-      app.root.router.request('/banana/room/state', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-
-    assert.equal(
-      (
-        await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[3, 4], [2, 4]] })
-      ).status,
-      204,
-    )
-    assert.equal(
-      (await state({ id: 'peer-one', name: '', score: 30, ripe: 40, cells: [] })).status,
-      400,
-    )
-    assert.equal(
-      (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[99, 4]] })).status,
-      400,
-    )
-    // The board is 30 by 30, so its last cell is drawn and the cell past it is not.
-    assert.equal(
-      (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[29, 29]] })).status,
-      204,
-    )
-    assert.equal(
-      (await state({ id: 'peer-one', name: 'Ada', score: 30, ripe: 40, cells: [[30, 0]] })).status,
-      400,
-    )
-
-    const stream = await app.root.router.request('/banana/room/events?id=reader-one')
-    assert.equal(stream.status, 200)
-    assert.match(stream.headers.get('content-type') ?? '', /text\/event-stream/)
-    const reader = stream.body?.getReader()
-    assert.ok(reader, 'the room answers a body')
-    const decoder = new TextDecoder()
-    let text = ''
-    try {
-      for (let round = 0; round < 20 && !text.includes('peer-one'); round += 1) {
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const chunk = await Promise.race([
-          reader.read(),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error('the room sent nothing in 3 seconds')), 3000)
-          }),
-        ]).finally(() => clearTimeout(timer))
-        if (chunk.done) break
-        text += decoder.decode(chunk.value, { stream: true })
+    const send = (path: string, body: unknown) => app.root.router.request('/banana/room/' + path, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const key = 'secret_key_123456789'
+    assert.equal((await send('join', { key: 'short', name: 'Ada' })).status, 400)
+    for (const [x, y] of [[1, 1], [0, 0], [2, 0], [-1, -1], [0.5, 0]])
+      assert.equal((await send('turn', { key, x, y })).status, 400)
+    const joined = await send('join', { key, name: 'Ada' })
+    assert.equal(joined.status, 201)
+    const { id, step } = await joined.json() as { id: string; step: number }
+    assert.equal(step, 0)
+    assert.notEqual(id, key)
+    assert.equal((await send('turn', { key: id, x: 0, y: 1 })).status, 404)
+    const one = await app.root.router.request('/banana/room/events?key=' + key)
+    const two = await app.root.router.request('/banana/room/events?key=' + key)
+    const readers = [one.body!.getReader(), two.body!.getReader()]
+    async function readRoom(reader: ReadableStreamDefaultReader<Uint8Array>) {
+      let text = ''
+      while (!text.includes('event: room')) {
+        const chunk = await reader.read()
+        assert.equal(chunk.done, false)
+        text += new TextDecoder().decode(chunk.value)
       }
-    } finally {
-      await reader.cancel()
+      assert.ok(!text.includes(key))
+      return JSON.parse(text.match(/event: room\ndata: (.*)/)![1])
     }
-    assert.match(text, /event: hello/)
-    assert.match(text, /"peer-one"/)
-    assert.match(text, /"Ada"/)
+    try {
+      assert.deepEqual(await readRoom(readers[0]), await readRoom(readers[1]))
+      await readers[0].cancel()
+      assert.equal((await send('turn', { key, x: 0, y: 1 })).status, 204)
+      for (let i = 0; i < 23; i++) assert.equal((await send('join', { key: 'another_key_' + String(i).padStart(8, '0'), name: 'B' })).status, 201)
+      assert.equal((await send('join', { key: 'one_more_key_123456', name: 'C' })).status, 429)
+    } finally { await readers[1].cancel() }
   }))
 
 test('keeps the board in a file across a restart', async () => {
@@ -202,3 +177,33 @@ test('keeps the board in a file across a restart', async () => {
     await rm(home, { recursive: true, force: true })
   }
 })
+
+
+test('a slow stream keeps the newest snapshot and every pending ending', () => {
+  const world = createWorld()
+  const first = world.snapshot()
+  const ending = { id: 'player', reason: 'Tangle!', score: 10, length: 7 }
+  const merged = mergeSnapshots({ ...first, ended: [ending] }, { ...first, step: 2 })
+  assert.equal(merged.step, 2)
+  assert.deepEqual(merged.ended, [ending])
+})
+
+test('spectators see the last player leave and unload closes streams', () =>
+  withApp(async (app) => {
+    const key = 'player_key_123456789'
+    const spectator = await app.root.router.request('/banana/room/events?key=spectator_key_123456')
+    const reader = spectator.body!.getReader()
+    const player = await app.root.router.request('/banana/room/events?key=' + key)
+    const playerReader = player.body!.getReader()
+    const joined = await app.root.router.request('/banana/room/join', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, name: 'Ada' }),
+    })
+    assert.equal(joined.status, 201)
+    let text = ''
+    while (!text.includes('"name":"Ada"')) text += new TextDecoder().decode((await reader.read()).value)
+    await playerReader.cancel()
+    text = ''
+    while (!text.includes('"players":[]')) text += new TextDecoder().decode((await reader.read()).value)
+    await app.stop()
+    while (!(await reader.read()).done) { /* drain the stream */ }
+  }))

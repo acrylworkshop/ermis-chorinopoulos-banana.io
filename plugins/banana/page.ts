@@ -146,15 +146,8 @@ export function bananaPage(options: BananaPageOptions): string {
 
       const game = {
         snake: [],
-        prev: [],
-        alpha: 0,
-        dir: { x: 1, y: 0 },
-        queue: [],
-        food: null,
         ripeness: 0,
         score: 0,
-        acc: 0,
-        last: 0,
         running: false,
       }
 
@@ -168,51 +161,6 @@ export function bananaPage(options: BananaPageOptions): string {
 
       function isGolden() {
         return game.ripeness >= 25 && game.ripeness <= 60
-      }
-
-      function freeCell() {
-        const taken = new Set()
-        for (const part of game.snake) taken.add(part.x + ',' + part.y)
-        const open = []
-        for (let y = 0; y < ROWS; y += 1) {
-          for (let x = 0; x < COLS; x += 1) {
-            if (!taken.has(x + ',' + y)) open.push({ x: x, y: y })
-          }
-        }
-        return open.length ? open[Math.floor(Math.random() * open.length)] : { x: 0, y: 0 }
-      }
-
-      function spawnFood() {
-        const cell = freeCell()
-        const roll = Math.random()
-        let kind = 'grape'
-        if (game.ripeness > 22 && roll > 0.93) kind = 'ice'
-        else if (roll > 0.7) kind = 'sugar'
-        game.food = { x: cell.x, y: cell.y, kind: kind }
-      }
-
-      function reset() {
-        // A full banana at the start, not a stub: the game begins with something you can see and steer.
-        const mid = Math.floor(COLS / 2)
-        const row = Math.floor(ROWS / 2)
-        game.snake = [
-          { x: mid + 1, y: row },
-          { x: mid, y: row },
-          { x: mid - 1, y: row },
-          { x: mid - 2, y: row },
-          { x: mid - 3, y: row },
-          { x: mid - 4, y: row },
-        ]
-        game.prev = game.snake.slice()
-        game.alpha = 0
-        game.dir = { x: 1, y: 0 }
-        game.queue = []
-        game.ripeness = 0
-        game.score = 0
-        game.acc = 0
-        game.food = null
-        spawnFood()
-        hud()
       }
 
       function hud() {
@@ -229,23 +177,39 @@ export function bananaPage(options: BananaPageOptions): string {
               : 'Golden band: ripeness 25% to 60%, doubled points'
       }
 
-      function queueDir(nx, ny) {
-        const last = game.queue.length ? game.queue[game.queue.length - 1] : game.dir
-        if (nx === -last.x && ny === -last.y) return
-        if (nx === last.x && ny === last.y) return
-        if (game.queue.length < 2) game.queue.push({ x: nx, y: ny })
+      let turns = Promise.resolve()
+      function queueDir(x, y) {
+        if (!game.running) return
+        turns = turns.then(() => fetch('/banana/room/turn', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ key: secret, x: x, y: y }),
+        })).catch(() => { statusEl.textContent = 'Could not send direction.' })
       }
 
-      function start() {
-        const nick = nickInput.value.trim().slice(0, 16)
-        if (nick) myName = nick
-        reset()
-        game.running = true
-        game.last = 0
-        overlay.hidden = true
-        saveForm.hidden = true
-        savedEl.hidden = true
-        statusEl.textContent = 'Playing. Eat fruit, stay golden.'
+      async function start() {
+        if (joining || game.running) return
+        joining = true
+        myName = nickInput.value.trim().slice(0, 16) || myName
+        try {
+          const response = await fetch('/banana/room/join', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ key: secret, name: myName }),
+          })
+          if (!response.ok) throw new Error('Join failed (' + response.status + ').')
+          const joined = await response.json()
+          myId = joined.id
+          joinStep = joined.step
+          seenPlayer = false
+          game.score = 0
+          game.snake = []
+          game.ripeness = 0
+          game.running = true
+          overlay.hidden = true
+          saveForm.hidden = true
+          savedEl.hidden = true
+          statusEl.textContent = 'Playing. Eat fruit, stay golden.'
+        } catch (error) { statusEl.textContent = error.message || 'Could not join.' }
+        finally { joining = false }
       }
 
       function finish(title, text) {
@@ -260,48 +224,6 @@ export function bananaPage(options: BananaPageOptions): string {
         overlay.hidden = false
         statusEl.textContent = title + ' ' + text + ' Score ' + game.score + '.'
         refreshBoard()
-      }
-
-      function eat(food) {
-        const multiplier = isGolden() ? 2 : 1
-        if (food.kind === 'sugar') {
-          game.score += 25 * multiplier
-          game.ripeness = Math.min(100, game.ripeness + 13)
-        } else if (food.kind === 'ice') {
-          game.score += 5 * multiplier
-          game.ripeness = Math.max(0, game.ripeness - 28)
-          game.snake.pop()
-        } else {
-          game.score += 10 * multiplier
-          game.ripeness = Math.min(100, game.ripeness + 5)
-        }
-        spawnFood()
-        hud()
-      }
-
-      function tickFor() {
-        return 150 - Math.min(55, (game.snake.length - 3) * 5)
-      }
-
-      function step() {
-        if (!game.running) return
-        if (game.queue.length) game.dir = game.queue.shift()
-        // Remember where every cell was, so the drawing can slide it toward where it is now.
-        game.prev = game.snake.slice()
-        const head = {
-          x: (game.snake[0].x + game.dir.x + COLS) % COLS,
-          y: (game.snake[0].y + game.dir.y + ROWS) % ROWS,
-        }
-        for (const part of game.snake) {
-          if (part.x === head.x && part.y === head.y) {
-            finish('Tangle!', 'The banana tied itself in a knot.')
-            return
-          }
-        }
-        game.snake.unshift(head)
-        const food = game.food
-        if (food && head.x === food.x && head.y === food.y) eat(food)
-        else game.snake.pop()
       }
 
       function makeRandom(seed) {
@@ -829,50 +751,23 @@ export function bananaPage(options: BananaPageOptions): string {
         view.fill()
       }
 
-      /** The banana's cells slid between the last two steps, so it glides instead of jumping from cell to cell. */
-      function smoothCells() {
-        const current = game.snake
-        const before = game.prev
-        const blend = game.alpha
-        const out = []
-        for (let i = 0; i < current.length; i += 1) {
-          const to = current[i]
-          const from = before[i]
-          // A cell that jumped across an edge is not slid, or it would cut across the counter.
-          if (!from || Math.abs(from.x - to.x) > 1.5 || Math.abs(from.y - to.y) > 1.5) {
-            out.push({ x: to.x, y: to.y })
-          } else {
-            out.push({ x: from.x + (to.x - from.x) * blend, y: from.y + (to.y - from.y) * blend })
-          }
-        }
-        return out
+      function smoothCells(player) {
+        const before = previous.players.find(p => p.id === player.id)
+        const blend = Math.min(1, (performance.now() - receivedAt) / 120)
+        return player.cells.map((cell, i) => {
+          const from = before && before.cells[i]
+          if (!from || Math.abs(from[0] - cell[0]) > 1.5 || Math.abs(from[1] - cell[1]) > 1.5) return { x: cell[0], y: cell[1] }
+          return { x: from[0] + (cell[0] - from[0]) * blend, y: from[1] + (cell[1] - from[1]) * blend }
+        })
       }
 
       function draw(time) {
         view.drawImage(wood, 0, 0)
-        for (const ghost of ghosts) drawBanana(ghost.cells, ghost.ripe, 0.45, ghost.name)
-        if (game.food) drawFood(game.food, time)
-        drawBanana(smoothCells(), game.ripeness, 1, myName)
+        for (const food of latest.foods) drawFood(food, time)
+        for (const player of latest.players) drawBanana(smoothCells(player), player.ripe, 1, player.name)
       }
 
       function frame(now) {
-        const dt = game.last ? Math.min(120, now - game.last) : 0
-        game.last = now
-        if (game.running) {
-          // A banana that eats nothing lasts about five minutes before it rots.
-          game.ripeness = Math.min(100, game.ripeness + dt * 0.00035)
-          game.acc += dt
-          const tick = tickFor()
-          while (game.acc >= tick && game.running) {
-            game.acc -= tick
-            step()
-          }
-          if (game.running && game.ripeness >= 100) {
-            finish('Rotten!', 'The mould took the whole banana.')
-          }
-          game.alpha = game.running ? Math.min(0.999, game.acc / tick) : 1
-          hud()
-        }
         draw(now)
         requestAnimationFrame(frame)
       }
@@ -909,42 +804,16 @@ export function bananaPage(options: BananaPageOptions): string {
         }
       }
 
-      // The shared counter: this page draws every other banana on it, and pushes its own to /banana/room/state.
       const roomEl = document.getElementById('banana-room')
-      const me = 'p' + Math.random().toString(36).slice(2, 10)
-      let roomState = []
-      let ghosts = []
-      let myName = 'Guest ' + me.slice(-3)
-
-      function buildGhosts() {
-        const out = []
-        for (const peer of roomState) {
-          if (!peer || peer.id === me || !Array.isArray(peer.cells)) continue
-          const cells = []
-          for (const cell of peer.cells) {
-            if (!Array.isArray(cell) || cell.length !== 2) continue
-            cells.push({ x: cell[0], y: cell[1] })
-          }
-          if (cells.length === 0) continue
-          out.push({
-            cells: cells,
-            ripe: typeof peer.ripe === 'number' ? peer.ripe : 0,
-            name: typeof peer.name === 'string' ? peer.name.slice(0, 16) : 'Banana',
-          })
-        }
-        return out
-      }
-
-      function showRoom() {
-        ghosts = buildGhosts()
-        const others = ghosts.length
-        roomEl.textContent =
-          others === 0
-            ? 'Nobody else on the counter right now. Open this page on another device, or send the link above, to play side by side.'
-            : others +
-              (others === 1 ? ' other banana' : ' other bananas') +
-              ' on the counter right now.'
-      }
+      const secret = Array.from(crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('')
+      let myName = 'Guest ' + Array.from(crypto.getRandomValues(new Uint8Array(3)), n => n.toString(16).padStart(2, '0')).join('')
+      let myId = null
+      let joinStep = 0
+      let seenPlayer = false
+      let joining = false
+      let latest = { players: [], foods: [] }
+      let previous = latest
+      let receivedAt = 0
 
       // The link other people open to join the same counter: this machine's network address plus the path of this page.
       if (LAN_ADDRESS) {
@@ -962,47 +831,28 @@ export function bananaPage(options: BananaPageOptions): string {
         joinEl.hidden = false
       }
 
-      function connectRoom() {
-        if (typeof EventSource !== 'function') return
-        try {
-          const source = new EventSource('/banana/room/events?id=' + encodeURIComponent(me))
-          source.addEventListener('room', (event) => {
-            try {
-              const data = JSON.parse(event.data)
-              roomState = Array.isArray(data.peers) ? data.peers : []
-            } catch (error) {
-              // A message this page cannot read: keep the room it already had.
-            }
-            showRoom()
-          })
-        } catch (error) {
-          // No live room: the game still plays, alone.
+      const source = new EventSource('/banana/room/events?key=' + encodeURIComponent(secret))
+      source.addEventListener('room', (event) => {
+        const data = JSON.parse(event.data)
+        previous = latest
+        latest = data
+        receivedAt = performance.now()
+        const player = data.players.find(p => p.id === myId)
+        const ended = data.ended.find(p => p.id === myId)
+        if (game.running && player) {
+          seenPlayer = true
+          game.score = player.score
+          game.ripeness = player.ripe
+          game.snake = player.cells
+          hud()
+        } else if (game.running && !joining && (seenPlayer || data.step > joinStep)) {
+          if (ended) { game.score = ended.score; game.snake = Array(ended.length) }
+          finish(ended ? ended.reason : 'Disconnected', ended ? (ended.reason === 'Tangle!' ? 'The banana tied itself in a knot.' : 'The mould took the whole banana.') : 'The game ended while disconnected.')
         }
-      }
-
-      async function sendState() {
-        if (!game.running) return
-        const cells = []
-        for (const part of game.snake) cells.push([part.x, part.y])
-        try {
-          await fetch('/banana/room/state', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              id: me,
-              name: myName,
-              score: game.score,
-              ripe: game.ripeness,
-              cells: cells,
-            }),
-          })
-        } catch (error) {
-          // Offline, or the plugin is off: the game still plays, alone.
-        }
-      }
-
-      setInterval(sendState, 130)
-      connectRoom()
+        const others = data.players.filter(p => p.id !== myId).length
+        roomEl.textContent = others ? others + (others === 1 ? ' other banana' : ' other bananas') + ' on the counter right now.' : 'Nobody else on the counter right now.'
+      })
+      source.onerror = () => { statusEl.textContent = 'Connecting to the counter...' }
 
       const KEYS = {
         ArrowUp: [0, -1],
@@ -1085,7 +935,7 @@ export function bananaPage(options: BananaPageOptions): string {
         }
       })
 
-      reset()
+      hud()
       draw(0)
       requestAnimationFrame(frame)
       refreshBoard()
