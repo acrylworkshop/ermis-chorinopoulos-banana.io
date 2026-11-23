@@ -30,8 +30,6 @@ const KEEP = 50
 const TOP = 10
 const NAME_MAX = 16
 const SCORE_MAX = 1_000_000
-/** The shared counter: at most this many bananas at once, and one nobody has updated for this long has left. */
-const ROOM_TTL = 4000
 /** The board every page draws on, so a cell another player sends lands where this page draws it. */
 const GRID = 30
 
@@ -125,13 +123,14 @@ export function apply(ctx: Context): void {
   let scores = readScores(file)
   const world = createWorld()
   const streams = new Map<string, Set<(snapshot?: ReturnType<typeof world.snapshot>) => void>>()
-  const expiry = new Map<string, ReturnType<typeof setTimeout>>()
+  const disconnected = new Map<string, true>()
   let timer: ReturnType<typeof setInterval> | undefined
   const stopIfEmpty = () => { if (!world.count && timer) { clearInterval(timer); timer = undefined } }
   const startTimer = () => {
     if (!timer) {
       timer = setInterval(() => {
         world.step()
+        for (const key of disconnected.keys()) if (world.resume(key).state !== 'playing') disconnected.delete(key)
         const snapshot = world.snapshot()
         for (const group of streams.values()) for (const send of group) send(snapshot)
         stopIfEmpty()
@@ -139,16 +138,8 @@ export function apply(ctx: Context): void {
       timer.unref()
     }
   }
-  /** Gives a player with no open stream ROOM_TTL to come back, so a short network drop does not end the game. */
-  const expire = (key: string) => {
-    clearTimeout(expiry.get(key))
-    const timeout = setTimeout(() => { expiry.delete(key); world.leave(key) }, ROOM_TTL)
-    timeout.unref()
-    expiry.set(key, timeout)
-  }
   ctx.effect(() => () => {
     if (timer) clearInterval(timer)
-    for (const timeout of expiry.values()) clearTimeout(timeout)
     for (const group of streams.values()) for (const close of group) close()
     streams.clear()
   })
@@ -201,14 +192,12 @@ export function apply(ctx: Context): void {
         const group = streams.get(key) ?? new Set<typeof send>()
         group.add(send)
         streams.set(key, group)
-        const timeout = expiry.get(key)
-        if (timeout) clearTimeout(timeout)
-        expiry.delete(key)
+        disconnected.delete(key)
         const close = () => {
           if (closed) return
           closed = true
           group.delete(send)
-          if (!group.size) { streams.delete(key); expire(key) }
+          if (!group.size) { streams.delete(key); if (world.resume(key).state === 'playing') { disconnected.delete(key); disconnected.set(key, true) } }
           resolve?.()
         }
         stream.onAbort(close)
@@ -227,13 +216,29 @@ export function apply(ctx: Context): void {
         } finally { close() }
       })
     })
+    .post('/room/resume', async (c) => {
+      let body: unknown
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
+      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key)) return c.json({ error: 'invalid body' }, 400)
+      const result = world.resume(body.key)
+      return c.json(result.state === 'playing' ? { ...result, connected: streams.has(body.key) } : result)
+    })
     .post('/room/join', async (c) => {
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
       if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key) || !('name' in body) || typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > NAME_MAX) return c.json({ error: 'invalid body' }, 400)
+      if (world.count >= 24 && world.resume(body.key).state !== 'playing') {
+        const oldest = [...disconnected.keys()].find(key => world.resume(key).state === 'playing')
+        if (oldest) {
+          world.end(oldest, 'Replaced')
+          disconnected.delete(oldest)
+          const snapshot = world.snapshot()
+          for (const group of streams.values()) for (const send of group) send(snapshot)
+        }
+      }
       const id = world.join(body.key, body.name.trim())
       if (!id) return c.json({ error: 'the counter is full' }, 429)
-      if (!streams.has(body.key)) expire(body.key)
+      if (!streams.has(body.key)) { disconnected.delete(body.key); disconnected.set(body.key, true) }
       startTimer()
       return c.json({ id, step: world.snapshot().step }, 201)
     })

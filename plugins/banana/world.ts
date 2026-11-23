@@ -11,6 +11,17 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
   let peak = 0
   let tick = 0
   let ended: { id: string; reason: string; score: number; length: number }[] = []
+  const endings = new Map<string, { reason: string; score: number; length: number; name: string }>()
+  const end = (key: string, reason: string) => {
+    const p = players.get(key)
+    if (!p) return
+    const result = { reason, score: p.score, length: p.cells.length, name: p.name }
+    endings.delete(key)
+    endings.set(key, result)
+    if (endings.size > 200) endings.delete(endings.keys().next().value!)
+    ended.push({ id: p.id, ...result })
+    players.delete(key)
+  }
   const taken = (except?: string) => new Set([...players.entries()].filter(([key]) => key !== except).flatMap(([, p]) => p.cells.map(([x, y]) => y * size + x)).concat(foods.map(f => f.y * size + f.x)))
   const refill = () => {
     const occupied = taken()
@@ -39,9 +50,17 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       const oldSize = size
       const nextPeak = Math.max(peak, players.size + (old ? 0 : 1))
       size = MIN_SIZE + 6 * (nextPeak - 1)
-      const occupied = taken(key)
+      const remapped = new Map([...players].map(([k, p]) => {
+        const cells: Cell[] = [p.cells[0]]
+        for (let i = 1; i < p.cells.length; i++) {
+          const previous = p.cells[i - 1], cell = p.cells[i], last = cells[i - 1]
+          cells.push([0, 1].map(axis => (last[axis] + ((cell[axis] - previous[axis] + oldSize + oldSize / 2) % oldSize - oldSize / 2) + size) % size) as Cell)
+        }
+        return [k, cells] as const
+      }))
+      const occupied = new Set([...remapped].filter(([k]) => k !== key).flatMap(([, cells]) => cells.map(([x, y]) => y * size + x)).concat(foods.map(f => f.y * size + f.x)))
       const near = new Set<number>()
-      for (const [otherKey, player] of players) if (otherKey !== key) for (const [x, y] of player.cells)
+      for (const [otherKey, cells] of remapped) if (otherKey !== key) for (const [x, y] of cells)
         for (let dy = -7; dy <= 7; dy++) for (let dx = -7; dx <= 7; dx++)
           if (dx * dx + dy * dy < 64) near.add(((y + dy + size) % size) * size + (x + dx + size) % size)
       const fits = (x: number, y: number) => Array.from({ length: 6 }, (_, i) => (x - i + size) % size)
@@ -56,6 +75,8 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       for (let y = 0; y < size && !spot; y++) for (let x = 0; x < size && !spot; x++) if (fits(x, y) && distant(x, y)) spot = [x, y]
       for (let y = 0; y < size && !spot; y++) for (let x = 0; x < size && !spot; x++) if (fits(x, y)) spot = [x, y]
       if (!spot) { size = oldSize; return undefined }
+      for (const [k, cells] of remapped) players.get(k)!.cells = cells
+      endings.delete(key)
       peak = nextPeak
       const [x, y] = spot
       const id = old?.id ?? crypto.randomUUID()
@@ -63,6 +84,13 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       refill()
       return id
     },
+    resume(key: string) {
+      const player = players.get(key)
+      if (player) return { state: 'playing' as const, id: player.id, step: tick, name: player.name }
+      const result = endings.get(key)
+      return result ? { state: 'ended' as const, ...result } : { state: 'none' as const }
+    },
+    end,
     turn(key: string, x: number, y: number) {
       const p = players.get(key)
       if (!p) return false
@@ -93,7 +121,7 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
           }
           if (p.ripe >= 100) reason = 'Rotten!'
         }
-        if (reason) { ended.push({ id: p.id, reason, score: p.score, length: p.cells.length }); players.delete(key) }
+        if (reason) end(key, reason)
       }
       if (!players.size) { size = MIN_SIZE; peak = 0; foods = foods.filter(f => f.x < size && f.y < size) }
       refill()

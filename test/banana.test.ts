@@ -145,7 +145,8 @@ test('the room validates requests and broadcasts the same world', () =>
       await readers[0].cancel()
       assert.equal((await send('turn', { key, x: 0, y: 1 })).status, 204)
       for (let i = 0; i < 23; i++) assert.equal((await send('join', { key: 'another_key_' + String(i).padStart(8, '0'), name: 'B' })).status, 201)
-      assert.equal((await send('join', { key: 'one_more_key_123456', name: 'C' })).status, 429)
+      assert.equal((await send('join', { key: 'one_more_key_123456', name: 'C' })).status, 201)
+      assert.equal((await (await send('resume', { key: 'another_key_00000000' })).json() as { reason: string }).reason, 'Replaced')
     } finally { await readers[1].cancel() }
   }))
 
@@ -188,29 +189,64 @@ test('a slow stream keeps the newest snapshot and every pending ending', () => {
   assert.deepEqual(merged.ended, [ending])
 })
 
-test('spectators see the last player leave and unload closes streams', () =>
+test('a disconnected banana keeps moving and its ending can be resumed', () =>
   withApp(async (app) => {
-    const key = 'player_key_123456789'
-    const spectator = await app.root.router.request('/banana/room/events?key=spectator_key_123456')
-    const reader = spectator.body!.getReader()
-    const player = await app.root.router.request('/banana/room/events?key=' + key)
-    const playerReader = player.body!.getReader()
-    const joined = await app.root.router.request('/banana/room/join', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, name: 'Ada' }),
+    const send = (path: string, body: unknown) => app.root.router.request('/banana/room/' + path, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     })
-    assert.equal(joined.status, 201)
+    const key = 'player_key_123456789'
+    assert.equal((await send('resume', { key: 'bad' })).status, 400)
+    assert.deepEqual(await (await send('resume', { key })).json(), { state: 'none' })
+    const { id } = await (await send('join', { key, name: 'Ada' })).json() as { id: string }
+    const player = (await app.root.router.request('/banana/room/events?key=' + key)).body!.getReader()
+    assert.deepEqual(await (await send('resume', { key })).json(), { state: 'playing', id, step: 0, name: 'Ada', connected: true })
+    await player.cancel()
+    await new Promise(resolve => setTimeout(resolve, 5100))
+    const playing = await (await send('resume', { key })).json() as { state: string; step: number; connected: boolean }
+    assert.equal(playing.state, 'playing')
+    assert.ok(playing.step > 0, 'the world advanced while disconnected')
+    assert.equal(playing.connected, false)
+    const spectator = (await app.root.router.request('/banana/room/events?key=spectator_key_123456')).body!.getReader()
+    for (const [x, y] of [[0, 1], [-1, 0], [0, -1]]) {
+      await send('turn', { key, x, y })
+      await new Promise(resolve => setTimeout(resolve, 125))
+    }
+    await new Promise(resolve => setTimeout(resolve, 130))
+    const result = await (await send('resume', { key })).json() as { state: string; reason: string; score: number; length: number; name: string }
+    assert.equal(result.state, 'ended')
+    assert.equal(result.reason, 'Tangle!')
+    assert.equal(result.name, 'Ada')
     let text = ''
-    while (!text.includes('"name":"Ada"')) text += new TextDecoder().decode((await reader.read()).value)
-    // A short drop keeps the game: back within the grace period, the same banana is still there after it has passed.
-    await playerReader.cancel()
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    const back = (await app.root.router.request('/banana/room/events?key=' + key)).body!.getReader()
-    const until = Date.now() + 4500
-    while (Date.now() < until) text = new TextDecoder().decode((await reader.read()).value)
-    assert.ok(text.includes('"name":"Ada"'), 'a short drop does not end the game')
-    await back.cancel()
-    text = ''
-    while (!text.includes('"players":[]')) text += new TextDecoder().decode((await reader.read()).value)
-    await app.stop()
-    while (!(await reader.read()).done) { /* drain the stream */ }
+    while (!text.includes('Tangle!')) text += new TextDecoder().decode((await spectator.read()).value)
+    assert.ok(!text.includes(key))
+    await send('join', { key, name: 'Ada' })
+    assert.equal((await (await send('resume', { key })).json() as { state: string }).state, 'playing')
+    await spectator.cancel()
   }))
+
+test('growth keeps bodies contiguous across either old edge and preserves ordinary bodies', () => {
+  for (const direction of ['x', 'y', 'none']) {
+    let values: number[] = []
+    const world = createWorld({ random: () => values.shift() ?? 0.5 })
+    values = direction === 'x' ? [2 / 30, 15 / 30] : direction === 'y' ? [15 / 30, 2 / 30] : [15 / 30, 15 / 30]
+    world.join('first', 'Ada')
+    if (direction === 'y') {
+      world.turn('first', 0, -1)
+      for (let i = 0; i < 3; i++) world.step()
+    }
+    const before = world.snapshot().players[0].cells
+    world.join('second', 'Bela')
+    const after = world.snapshot().players[0].cells
+    if (direction === 'none') assert.deepEqual(after, before)
+    else {
+      assert.deepEqual(after[0], before[0])
+      for (let i = 1; i < after.length; i++) {
+        const dx = Math.abs(after[i][0] - after[i - 1][0]), dy = Math.abs(after[i][1] - after[i - 1][1])
+        assert.equal(Math.min(dx, world.size - dx) + Math.min(dy, world.size - dy), 1)
+      }
+    }
+    world.step()
+    assert.equal(world.resume('first').state, 'playing')
+  }
+})
+

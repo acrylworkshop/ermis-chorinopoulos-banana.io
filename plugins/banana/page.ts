@@ -89,6 +89,7 @@ export function bananaPage(options: BananaPageOptions): string {
       </section>
       <div class="stage">
         <canvas id="banana-canvas" width="900" height="900" aria-label="The banana game board"></canvas>
+        <div class="overlay" id="banana-connection" hidden role="status">Connection lost. Your banana keeps going. Reconnecting...</div>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
           <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, and eating makes it fresh again before it moulds over. Other players on this counter show up live, with their names above them.</p>
@@ -197,6 +198,7 @@ export function bananaPage(options: BananaPageOptions): string {
           })
           if (!response.ok) throw new Error('Join failed (' + response.status + ').')
           const joined = await response.json()
+          try { sessionStorage.setItem('banana-key', secret); localStorage.setItem('banana-key', secret) } catch {}
           myId = joined.id
           joinStep = joined.step
           seenPlayer = false
@@ -874,12 +876,53 @@ export function bananaPage(options: BananaPageOptions): string {
       }
 
       const roomEl = document.getElementById('banana-room')
-      const secret = Array.from(crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('')
-      let myName = 'Guest ' + Array.from(crypto.getRandomValues(new Uint8Array(3)), n => n.toString(16).padStart(2, '0')).join('')
       let myId = null
       let joinStep = 0
       let seenPlayer = false
       let joining = false
+      const newKey = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), n => n.toString(16).padStart(2, '0')).join('')
+      let secret = newKey()
+      const resume = async (key) => {
+        const response = await fetch('/banana/room/resume', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }), signal: AbortSignal.timeout(3000) })
+        if (!response.ok) throw new Error('Resume failed')
+        return response.json()
+      }
+      let restored = { state: 'none' }
+      try {
+        const sessionKey = sessionStorage.getItem('banana-key')
+        const stored = sessionKey || localStorage.getItem('banana-key')
+        if (stored) {
+          let result = await resume(stored)
+          const reload = sessionKey && performance.getEntriesByType('navigation')[0]?.type === 'reload'
+          for (let i = 0; i < 5 && result.state === 'playing' && result.connected && !reload; i++) {
+            await new Promise(resolve => setTimeout(resolve, 400))
+            result = await resume(stored)
+          }
+          if ((sessionKey && result.state === 'none') || result.state === 'ended' || (result.state === 'playing' && (!result.connected || reload))) { secret = stored; restored = result }
+        }
+      } catch { secret = newKey() }
+      const connection = document.getElementById('banana-connection')
+      function endingText(reason, away) {
+        const text = reason === 'Tangle!' ? 'Your banana tied itself in a knot' : reason === 'Replaced' ? 'Your place was given to someone else because the counter was full' : 'Your banana went rotten'
+        return text + (away ? ' while you were away.' : '.')
+      }
+      function endedWhileAway(result) {
+        game.score = result.score
+        game.snake = Array(result.length)
+        finish('While you were away', endingText(result.reason, true))
+        saveForm.hidden = false
+        startBtn.textContent = 'Start over'
+        hud()
+      }
+      let myName = restored.name || 'Guest ' + Array.from(crypto.getRandomValues(new Uint8Array(3)), n => n.toString(16).padStart(2, '0')).join('')
+      if (restored.name && !restored.name.startsWith('Guest ')) nickInput.value = restored.name
+      if (restored.state === 'playing') {
+        myId = restored.id
+        joinStep = restored.step
+        game.running = true
+        overlay.hidden = true
+        statusEl.textContent = 'Welcome back. Your banana kept going.'
+      } else if (restored.state === 'ended') endedWhileAway(restored)
       let latest = { size: 30, players: [], foods: [] }
       let previous = latest
       let receivedAt = 0
@@ -901,9 +944,12 @@ export function bananaPage(options: BananaPageOptions): string {
         joinEl.hidden = false
       }
 
+      let wasDisconnected = false
+      let checkingResume = false
       const source = new EventSource('/banana/room/events?key=' + encodeURIComponent(secret))
       source.addEventListener('room', (event) => {
         const data = JSON.parse(event.data)
+        connection.hidden = true
         previous = latest
         latest = data
         receivedAt = performance.now()
@@ -911,13 +957,25 @@ export function bananaPage(options: BananaPageOptions): string {
         const ended = data.ended.find(p => p.id === myId)
         if (game.running && player) {
           seenPlayer = true
+          if (wasDisconnected) statusEl.textContent = 'Welcome back. Your banana kept going.'
+          wasDisconnected = false
           game.score = player.score
           game.ripeness = player.ripe
           game.snake = player.cells
           hud()
         } else if (game.running && !joining && (seenPlayer || data.step > joinStep)) {
-          if (ended) { game.score = ended.score; game.snake = Array(ended.length) }
-          finish(ended ? ended.reason : 'Disconnected', ended ? (ended.reason === 'Tangle!' ? 'The banana tied itself in a knot.' : 'The mould took the whole banana.') : 'The game ended while disconnected.')
+          if (ended) {
+            if (wasDisconnected) endedWhileAway(ended)
+            else { game.score = ended.score; game.snake = Array(ended.length); finish(ended.reason, endingText(ended.reason, false)) }
+            wasDisconnected = false
+          } else if (!checkingResume) {
+            checkingResume = true
+            resume(secret).then(result => {
+              if (!game.running) return
+              if (result.state === 'ended') endedWhileAway(result)
+              else if (result.state === 'none') { finish('The counter restarted', 'Your banana is no longer on the counter.'); saveForm.hidden = true; startBtn.textContent = 'Start over' }
+            }).catch(() => { connection.hidden = false }).finally(() => { checkingResume = false })
+          }
         }
         if (data.size > previous.size) growthMessage = ' The counter grew to ' + data.size + ' x ' + data.size + '.'
         else if (data.size < previous.size) growthMessage = ''
@@ -925,7 +983,7 @@ export function bananaPage(options: BananaPageOptions): string {
         roomEl.textContent = others ? others + (others === 1 ? ' other banana' : ' other bananas') + ' on the counter right now.' : 'Nobody else on the counter right now.'
         roomEl.textContent += growthMessage
       })
-      source.onerror = () => { statusEl.textContent = 'Connecting to the counter...' }
+      source.onerror = () => { if (game.running) { wasDisconnected = true; connection.hidden = false } else statusEl.textContent = 'Connecting to the counter...' }
 
       const KEYS = {
         ArrowUp: [0, -1],

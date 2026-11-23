@@ -72,14 +72,21 @@ test('grape and sugar make the banana fresher and never below 0', () => {
   assert.ok(seen.has('grape') && seen.has('sugar'), [...seen].join())
 })
 
-test('the counter grows with its peak, preserves cells, wraps and resets when empty', () => {
+test('the counter grows with its peak, preserves bodies, wraps and resets when empty', () => {
   const world = createWorld({ random: () => 0 })
   for (let i = 0; i < 24; i++) {
     const before = world.snapshot().players.map(p => p.cells)
     assert.ok(world.join(String(i), 'Player'))
     const snapshot = world.snapshot()
     assert.equal(snapshot.size, 30 + 6 * i)
-    assert.deepEqual(snapshot.players.slice(0, i).map(p => p.cells), before)
+    for (let j = 0; j < i; j++) {
+      const cells = snapshot.players[j].cells
+      assert.deepEqual(cells[0], before[j][0])
+      for (let k = 1; k < cells.length; k++) {
+        const dx = Math.abs(cells[k][0] - cells[k - 1][0]), dy = Math.abs(cells[k][1] - cells[k - 1][1])
+        assert.equal(Math.min(dx, snapshot.size - dx) + Math.min(dy, snapshot.size - dy), 1)
+      }
+    }
     assert.equal(snapshot.foods.length, Math.max(3, Math.round(snapshot.size ** 2 / 150)))
     const added = snapshot.players[i]
     for (const cell of added.cells) for (const other of snapshot.players.slice(0, i)) for (const c of other.cells) {
