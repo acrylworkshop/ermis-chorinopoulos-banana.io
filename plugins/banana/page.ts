@@ -183,7 +183,7 @@ export function bananaPage(options: BananaPageOptions): string {
         if (!game.running) return
         turns = turns.then(() => fetch('/banana/room/turn', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ key: secret, x: x, y: y }),
+          body: JSON.stringify({ key: secret, x: x, y: y }), signal: AbortSignal.timeout(2000),
         })).catch(() => { statusEl.textContent = 'Could not send direction.' })
       }
 
@@ -884,19 +884,27 @@ export function bananaPage(options: BananaPageOptions): string {
       let secret = newKey()
       const resume = async (key) => {
         const response = await fetch('/banana/room/resume', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }), signal: AbortSignal.timeout(3000) })
-        if (!response.ok) throw new Error('Resume failed')
-        return response.json()
+        return response.ok ? response.json() : { state: 'none' }
+      }
+      /** The banana keeps going on the server, so a resume that cannot get through is tried again rather than given up. */
+      const resumeSoon = async (key) => {
+        for (;;) {
+          try { return await resume(key) } catch {
+            statusEl.textContent = 'Reconnecting to your banana...'
+            await new Promise(resolve => setTimeout(resolve, 1000))
+          }
+        }
       }
       let restored = { state: 'none' }
       try {
         const sessionKey = sessionStorage.getItem('banana-key')
         const stored = sessionKey || localStorage.getItem('banana-key')
         if (stored) {
-          let result = await resume(stored)
+          let result = await resumeSoon(stored)
           const reload = sessionKey && performance.getEntriesByType('navigation')[0]?.type === 'reload'
           for (let i = 0; i < 5 && result.state === 'playing' && result.connected && !reload; i++) {
             await new Promise(resolve => setTimeout(resolve, 400))
-            result = await resume(stored)
+            result = await resumeSoon(stored)
           }
           if ((sessionKey && result.state === 'none') || result.state === 'ended' || (result.state === 'playing' && (!result.connected || reload))) { secret = stored; restored = result }
         }
@@ -946,8 +954,7 @@ export function bananaPage(options: BananaPageOptions): string {
 
       let wasDisconnected = false
       let checkingResume = false
-      const source = new EventSource('/banana/room/events?key=' + encodeURIComponent(secret))
-      source.addEventListener('room', (event) => {
+      function onRoom(event) {
         const data = JSON.parse(event.data)
         connection.hidden = true
         previous = latest
@@ -982,8 +989,26 @@ export function bananaPage(options: BananaPageOptions): string {
         const others = data.players.filter(p => p.id !== myId).length
         roomEl.textContent = others ? others + (others === 1 ? ' other banana' : ' other bananas') + ' on the counter right now.' : 'Nobody else on the counter right now.'
         roomEl.textContent += growthMessage
-      })
-      source.onerror = () => { if (game.running) { wasDisconnected = true; connection.hidden = false } else statusEl.textContent = 'Connecting to the counter...' }
+      }
+      function lostConnection() {
+        if (game.running) { wasDisconnected = true; connection.hidden = false } else statusEl.textContent = 'Connecting to the counter...'
+      }
+      let source
+      let openedAt = 0
+      function connect() {
+        if (source) source.close()
+        openedAt = performance.now()
+        source = new EventSource('/banana/room/events?key=' + encodeURIComponent(secret))
+        source.addEventListener('room', onRoom)
+        source.onerror = lostConnection
+      }
+      connect()
+      // A dropped network can leave the stream open but silent for minutes: while playing, updates come several times a second.
+      setInterval(() => {
+        const silence = performance.now() - Math.max(receivedAt, openedAt)
+        if (game.running && performance.now() - receivedAt > 2000 && silence > 1000) lostConnection()
+        if (game.running && silence > 4000) connect()
+      }, 500)
 
       const KEYS = {
         ArrowUp: [0, -1],
