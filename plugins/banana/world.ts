@@ -1,5 +1,5 @@
 export const STEP_MS = 120
-const SIZE = 30
+const MIN_SIZE = 30
 type Cell = [number, number]
 type Food = { x: number; y: number; kind: 'grape' | 'sugar' | 'ice' }
 type Player = { id: string; name: string; cells: Cell[]; score: number; ripe: number; dir: Cell; queue: Cell[] }
@@ -7,44 +7,59 @@ type Player = { id: string; name: string; cells: Cell[]; score: number; ripe: nu
 export function createWorld({ random = Math.random }: { random?: () => number } = {}) {
   const players = new Map<string, Player>()
   let foods: Food[] = []
+  let size = MIN_SIZE
+  let peak = 0
   let tick = 0
   let ended: { id: string; reason: string; score: number; length: number }[] = []
-  const taken = (except?: string) => new Set([...players.entries()].filter(([key]) => key !== except).flatMap(([, p]) => p.cells.map(([x, y]) => y * SIZE + x)).concat(foods.map(f => f.y * SIZE + f.x)))
+  const taken = (except?: string) => new Set([...players.entries()].filter(([key]) => key !== except).flatMap(([, p]) => p.cells.map(([x, y]) => y * size + x)).concat(foods.map(f => f.y * size + f.x)))
   const refill = () => {
     const occupied = taken()
-    while (foods.length < Math.max(3, 2 * players.size)) {
-      const free: Cell[] = []
-      for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++)
-        if (!occupied.has(y * SIZE + x)) free.push([x, y])
-      if (!free.length) break
-      const [x, y] = free[Math.floor(random() * free.length)]
+    const target = Math.max(3, Math.round(size * size / 150))
+    if (foods.length >= target) { foods = foods.slice(0, target); return }
+    const free: Cell[] = []
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++)
+      if (!occupied.has(y * size + x)) free.push([x, y])
+    const average = [...players.values()].reduce((sum, p) => sum + p.ripe, 0) / (players.size || 1)
+    while (foods.length < target && free.length) {
+      const index = Math.floor(random() * free.length)
+      const [x, y] = free[index]
+      free[index] = free[free.length - 1]
+      free.pop()
       const roll = random()
-      const average = [...players.values()].reduce((sum, p) => sum + p.ripe, 0) / (players.size || 1)
-      occupied.add(y * SIZE + x)
       foods.push({ x, y, kind: average > 22 && roll > .93 ? 'ice' : roll > .7 ? 'sugar' : 'grape' })
     }
-    foods = foods.slice(0, Math.max(3, 2 * players.size))
   }
   refill()
   return {
-    get size() { return SIZE },
+    get size() { return size },
     get count() { return players.size },
     join(key: string, name: string) {
       const old = players.get(key)
       if (!old && players.size >= 24) return undefined
+      const oldSize = size
+      const nextPeak = Math.max(peak, players.size + (old ? 0 : 1))
+      size = MIN_SIZE + 6 * (nextPeak - 1)
       const occupied = taken(key)
-      const fits = (x: number, y: number) => Array.from({ length: 6 }, (_, i) => (x - i + SIZE) % SIZE)
-        .every(cx => !occupied.has(y * SIZE + cx))
+      const near = new Set<number>()
+      for (const [otherKey, player] of players) if (otherKey !== key) for (const [x, y] of player.cells)
+        for (let dy = -7; dy <= 7; dy++) for (let dx = -7; dx <= 7; dx++)
+          if (dx * dx + dy * dy < 64) near.add(((y + dy + size) % size) * size + (x + dx + size) % size)
+      const fits = (x: number, y: number) => Array.from({ length: 6 }, (_, i) => (x - i + size) % size)
+        .every(cx => !occupied.has(y * size + cx))
+      const distant = (x: number, y: number) => Array.from({ length: 6 }, (_, i) => (x - i + size) % size)
+        .every(cx => !near.has(y * size + cx))
       let spot: Cell | undefined
       for (let i = 0; i < 100 && !spot; i++) {
-        const x = Math.floor(random() * SIZE), y = Math.floor(random() * SIZE)
-        if (fits(x, y)) spot = [x, y]
+        const x = Math.floor(random() * size), y = Math.floor(random() * size)
+        if (fits(x, y) && distant(x, y)) spot = [x, y]
       }
-      for (let y = 0; y < SIZE && !spot; y++) for (let x = 0; x < SIZE && !spot; x++) if (fits(x, y)) spot = [x, y]
-      if (!spot) return undefined
+      for (let y = 0; y < size && !spot; y++) for (let x = 0; x < size && !spot; x++) if (fits(x, y) && distant(x, y)) spot = [x, y]
+      for (let y = 0; y < size && !spot; y++) for (let x = 0; x < size && !spot; x++) if (fits(x, y)) spot = [x, y]
+      if (!spot) { size = oldSize; return undefined }
+      peak = nextPeak
       const [x, y] = spot
       const id = old?.id ?? crypto.randomUUID()
-      players.set(key, { id, name, cells: Array.from({ length: 6 }, (_, i) => [(x - i + SIZE) % SIZE, y]), score: 0, ripe: 0, dir: [1, 0], queue: [] })
+      players.set(key, { id, name, cells: Array.from({ length: 6 }, (_, i) => [(x - i + size) % size, y]), score: 0, ripe: 0, dir: [1, 0], queue: [] })
       refill()
       return id
     },
@@ -57,14 +72,14 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       if (p.queue.length < 2) p.queue.push([x, y])
       return true
     },
-    leave(key: string) { players.delete(key); refill() },
+    leave(key: string) { players.delete(key); if (!players.size) { size = MIN_SIZE; peak = 0; foods = foods.filter(f => f.x < size && f.y < size) }; refill() },
     step() {
       tick++
       ended = []
       for (const [key, p] of players) {
         p.ripe = Math.min(100, p.ripe + .00035 * STEP_MS)
         p.dir = p.queue.shift() ?? p.dir
-        const head: Cell = [(p.cells[0][0] + p.dir[0] + SIZE) % SIZE, (p.cells[0][1] + p.dir[1] + SIZE) % SIZE]
+        const head: Cell = [(p.cells[0][0] + p.dir[0] + size) % size, (p.cells[0][1] + p.dir[1] + size) % size]
         let reason = p.cells.some(c => c[0] === head[0] && c[1] === head[1]) ? 'Tangle!' : ''
         if (!reason) {
           p.cells.unshift(head)
@@ -80,8 +95,9 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
         }
         if (reason) { ended.push({ id: p.id, reason, score: p.score, length: p.cells.length }); players.delete(key) }
       }
+      if (!players.size) { size = MIN_SIZE; peak = 0; foods = foods.filter(f => f.x < size && f.y < size) }
       refill()
     },
-    snapshot() { return { step: tick, size: SIZE, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe })), ended: ended.map(e => ({ ...e })) } },
+    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe })), ended: ended.map(e => ({ ...e })) } },
   }
 }

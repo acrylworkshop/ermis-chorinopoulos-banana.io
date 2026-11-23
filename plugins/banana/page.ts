@@ -118,8 +118,8 @@ export function bananaPage(options: BananaPageOptions): string {
       const canvas = document.getElementById('banana-canvas')
       const view = canvas.getContext('2d')
       if (!view) throw new Error('this browser has no 2d canvas')
-      const COLS = ${options.size}
-      const ROWS = ${options.size}
+      const COLS = 30
+      const ROWS = 30
       // This machine's network address and whether the server listens on this machine only: together they make the join link.
       const LAN_ADDRESS = ${JSON.stringify(options.lanAddress ?? null)}
       const LOCAL_ONLY = ${options.localOnly === true}
@@ -751,20 +751,89 @@ export function bananaPage(options: BananaPageOptions): string {
         view.fill()
       }
 
-      function smoothCells(player) {
-        const before = previous.players.find(p => p.id === player.id)
-        const blend = Math.min(1, (performance.now() - receivedAt) / 120)
-        return player.cells.map((cell, i) => {
-          const from = before && before.cells[i]
-          if (!from || Math.abs(from[0] - cell[0]) > 1.5 || Math.abs(from[1] - cell[1]) > 1.5) return { x: cell[0], y: cell[1] }
-          return { x: from[0] + (cell[0] - from[0]) * blend, y: from[1] + (cell[1] - from[1]) * blend }
-        })
+      function delta(a, b, size) {
+        return (((a - b + size / 2) % size + size) % size) - size / 2
       }
 
+      function smoothCells(player) {
+        const size = latest.size
+        const before = previous.size === size && previous.players.find(p => p.id === player.id)
+        const blend = Math.min(1, (performance.now() - receivedAt) / 120)
+        const cells = player.cells.map((cell, i) => {
+          const from = before && before.cells[i]
+          return from
+            ? { x: from[0] + delta(cell[0], from[0], size) * blend, y: from[1] + delta(cell[1], from[1], size) * blend }
+            : { x: cell[0], y: cell[1] }
+        })
+        for (let i = 1; i < cells.length; i++) {
+          cells[i].x = cells[i - 1].x + delta(cells[i].x, cells[i - 1].x, size)
+          cells[i].y = cells[i - 1].y + delta(cells[i].y, cells[i - 1].y, size)
+        }
+        return cells
+      }
+
+      let camera = { x: 15, y: 15 }
+      // The wood and its mirror images in one tile, so it repeats without a seam.
+      const floorTile = document.createElement('canvas')
+      floorTile.width = wood.width * 2
+      floorTile.height = wood.height * 2
+      const floorView = floorTile.getContext('2d')
+      for (const fx of [1, -1]) for (const fy of [1, -1]) {
+        floorView.setTransform(fx, 0, 0, fy, fx < 0 ? floorTile.width : 0, fy < 0 ? floorTile.height : 0)
+        floorView.drawImage(wood, 0, 0)
+      }
       function draw(time) {
-        view.drawImage(wood, 0, 0)
-        for (const food of latest.foods) drawFood(food, time)
-        for (const player of latest.players) drawBanana(smoothCells(player), player.ripe, 1, player.name)
+        const size = latest.size
+        const own = latest.players.find(p => p.id === myId)
+        if (own) {
+          const head = smoothCells(own)[0]
+          camera.x += delta(head.x, camera.x, size)
+          camera.y += delta(head.y, camera.y, size)
+        }
+        const left = camera.x - COLS / 2, top = camera.y - ROWS / 2
+        const w = floorTile.width, h = floorTile.height
+        const wx = ((-left * CELL) % w + w) % w
+        const wy = ((-top * CELL) % h + h) % h
+        for (const x of [wx - w, wx]) for (const y of [wy - h, wy]) view.drawImage(floorTile, x, y)
+        for (const food of latest.foods) {
+          const x = camera.x + delta(food.x, camera.x, size) - left
+          const y = camera.y + delta(food.y, camera.y, size) - top
+          for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size])
+            if (x + dx > -1 && x + dx < COLS && y + dy > -1 && y + dy < ROWS)
+              drawFood({ ...food, x: x + dx, y: y + dy }, time)
+        }
+        for (const player of latest.players) {
+          const cells = smoothCells(player)
+          if (!cells.length) continue
+          const shiftX = camera.x + delta(cells[0].x, camera.x, size) - cells[0].x - left
+          const shiftY = camera.y + delta(cells[0].y, camera.y, size) - cells[0].y - top
+          for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
+            const shown = cells.map(c => ({ x: c.x + shiftX + dx, y: c.y + shiftY + dy }))
+            if (shown.some(c => c.x >= -1 && c.x < COLS + 1 && c.y >= -1 && c.y < ROWS + 1))
+              drawBanana(shown, player.ripe, 1, player.name)
+          }
+          const dx = delta(cells[0].x, camera.x, size), dy = delta(cells[0].y, camera.y, size)
+          if (size > 30 && player.id !== myId && (Math.abs(dx) > 15 || Math.abs(dy) > 15)) {
+            const scale = 13.8 / Math.max(Math.abs(dx), Math.abs(dy))
+            view.save()
+            view.translate((15 + dx * scale) * CELL, (15 + dy * scale) * CELL)
+            view.rotate(Math.atan2(dy, dx))
+            view.fillStyle = '#fff'
+            view.beginPath(); view.moveTo(8, 0); view.lineTo(-6, -5); view.lineTo(-6, 5); view.fill()
+            view.restore()
+          }
+        }
+        const map = 110, pad = 12
+        view.fillStyle = 'rgba(0,0,0,.7)'
+        view.fillRect(canvas.width - map - pad, pad, map, map)
+        for (const player of latest.players) {
+          const head = player.cells[0]
+          if (!head) continue
+          view.fillStyle = player.id === myId ? '#ffd45c' : '#fff'
+          view.beginPath()
+          view.arc(canvas.width - map - pad + head[0] / size * map, pad + head[1] / size * map, player.id === myId ? 4 : 3, 0, Math.PI * 2)
+          view.fill()
+        }
       }
 
       function frame(now) {
@@ -811,9 +880,10 @@ export function bananaPage(options: BananaPageOptions): string {
       let joinStep = 0
       let seenPlayer = false
       let joining = false
-      let latest = { players: [], foods: [] }
+      let latest = { size: 30, players: [], foods: [] }
       let previous = latest
       let receivedAt = 0
+      let growthMessage = ''
 
       // The link other people open to join the same counter: this machine's network address plus the path of this page.
       if (LAN_ADDRESS) {
@@ -849,8 +919,11 @@ export function bananaPage(options: BananaPageOptions): string {
           if (ended) { game.score = ended.score; game.snake = Array(ended.length) }
           finish(ended ? ended.reason : 'Disconnected', ended ? (ended.reason === 'Tangle!' ? 'The banana tied itself in a knot.' : 'The mould took the whole banana.') : 'The game ended while disconnected.')
         }
+        if (data.size > previous.size) growthMessage = ' The counter grew to ' + data.size + ' x ' + data.size + '.'
+        else if (data.size < previous.size) growthMessage = ''
         const others = data.players.filter(p => p.id !== myId).length
         roomEl.textContent = others ? others + (others === 1 ? ' other banana' : ' other bananas') + ' on the counter right now.' : 'Nobody else on the counter right now.'
+        roomEl.textContent += growthMessage
       })
       source.onerror = () => { statusEl.textContent = 'Connecting to the counter...' }
 
