@@ -8,7 +8,7 @@
     "id": "acrylblends.definitelyapp",
     "kind": "Blueprint",
     "version": "0.1.0",
-    "digest": "50077af6b779ed0cb71759dab242db6302fee2d4404a1163577e3a2404295678"
+    "digest": "5fd5a79dd86b1deeaad8878aa1fed53083960417de4ed424426bd649177c3089"
   },
   "parameters": {
     "hostname": "0.0.0.0"
