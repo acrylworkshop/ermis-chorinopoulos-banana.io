@@ -139,6 +139,13 @@ export function apply(ctx: Context): void {
       timer.unref()
     }
   }
+  /** Gives a player with no open stream ROOM_TTL to come back, so a short network drop does not end the game. */
+  const expire = (key: string) => {
+    clearTimeout(expiry.get(key))
+    const timeout = setTimeout(() => { expiry.delete(key); world.leave(key) }, ROOM_TTL)
+    timeout.unref()
+    expiry.set(key, timeout)
+  }
   ctx.effect(() => () => {
     if (timer) clearInterval(timer)
     for (const timeout of expiry.values()) clearTimeout(timeout)
@@ -201,12 +208,12 @@ export function apply(ctx: Context): void {
           if (closed) return
           closed = true
           group.delete(send)
-          if (!group.size) { streams.delete(key); world.leave(key) }
+          if (!group.size) { streams.delete(key); expire(key) }
           resolve?.()
         }
         stream.onAbort(close)
         try {
-          await stream.writeSSE({ event: 'hello', data: '{}' })
+          await stream.writeSSE({ event: 'hello', data: '{}', retry: 500 })
           await stream.writeSSE({ event: 'room', data: JSON.stringify(world.snapshot()) })
           while (!closed && !stream.aborted) {
             if (!pending) await new Promise<void>(r => { resolve = r })
@@ -226,14 +233,7 @@ export function apply(ctx: Context): void {
       if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key) || !('name' in body) || typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > NAME_MAX) return c.json({ error: 'invalid body' }, 400)
       const id = world.join(body.key, body.name.trim())
       if (!id) return c.json({ error: 'the counter is full' }, 429)
-      const previous = expiry.get(body.key)
-      if (previous) clearTimeout(previous)
-      if (!streams.has(body.key)) {
-        const key = body.key
-        const timeout = setTimeout(() => { expiry.delete(key); world.leave(key) }, ROOM_TTL)
-        timeout.unref()
-        expiry.set(key, timeout)
-      }
+      if (!streams.has(body.key)) expire(body.key)
       startTimer()
       return c.json({ id, step: world.snapshot().step }, 201)
     })

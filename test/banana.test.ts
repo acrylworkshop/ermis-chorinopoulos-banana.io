@@ -201,7 +201,14 @@ test('spectators see the last player leave and unload closes streams', () =>
     assert.equal(joined.status, 201)
     let text = ''
     while (!text.includes('"name":"Ada"')) text += new TextDecoder().decode((await reader.read()).value)
+    // A short drop keeps the game: back within the grace period, the same banana is still there after it has passed.
     await playerReader.cancel()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const back = (await app.root.router.request('/banana/room/events?key=' + key)).body!.getReader()
+    const until = Date.now() + 4500
+    while (Date.now() < until) text = new TextDecoder().decode((await reader.read()).value)
+    assert.ok(text.includes('"name":"Ada"'), 'a short drop does not end the game')
+    await back.cancel()
     text = ''
     while (!text.includes('"players":[]')) text += new TextDecoder().decode((await reader.read()).value)
     await app.stop()
