@@ -1,4 +1,4 @@
-# definitelyapp
+# ermis-chorinopoulos-banana.io
 
 A Cordis app on Node, scaffolded by `acrylblends init`. TypeScript, run by Node with no build step. Every part is a
 Cordis plugin.

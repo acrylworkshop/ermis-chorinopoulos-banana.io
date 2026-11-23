@@ -1,6 +1,6 @@
 ---
 name: acryl-remove-plugin
-description: Use when the person asks to remove, delete, switch off, hide or undo a feature or plugin of definitelyapp.
+description: Use when the person asks to remove, delete, switch off, hide or undo a feature or plugin of ermis-chorinopoulos-banana.io.
 ---
 # Switch off or remove a plugin
 

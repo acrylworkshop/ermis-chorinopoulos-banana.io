@@ -5,10 +5,10 @@
     "version": "0.6.0"
   },
   "origin": {
-    "id": "acrylblends.definitelyapp",
+    "id": "acrylblends.ermis-chorinopoulos-banana.io",
     "kind": "Blueprint",
     "version": "0.1.0",
-    "digest": "5fd5a79dd86b1deeaad8878aa1fed53083960417de4ed424426bd649177c3089"
+    "digest": "804e4386cda9bcd88fcf40d54277b37001bf56daae2c0d0b67cb70c249ed5649"
   },
   "parameters": {
     "hostname": "0.0.0.0"

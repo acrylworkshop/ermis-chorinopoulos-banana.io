@@ -4,7 +4,7 @@ import { Acryl } from '../plugins/router/src/index.ts'
 import { aboutPage } from './about.tsx'
 import { FIRST_PAGE_MARKER } from './first-page.ts'
 
-export const APP_NAME = 'definitelyapp'
+export const APP_NAME = 'ermis-chorinopoulos-banana.io'
 
 /**
  * The only place the app's mount prefix is named. On its own server (production, `npm start`) the app mounts at the root and

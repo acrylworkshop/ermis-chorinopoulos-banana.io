@@ -3,8 +3,8 @@
 apiVersion: blends.acryl.dev/v1alpha1
 kind: Blueprint
 metadata:
-  id: acrylblends.definitelyapp
-  name: definitelyapp
+  id: acrylblends.ermis-chorinopoulos-banana.io
+  name: ermis-chorinopoulos-banana.io
   version: 0.1.0
   visibility: public
 spec:
