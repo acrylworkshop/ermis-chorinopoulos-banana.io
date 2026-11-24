@@ -181,6 +181,8 @@ export function bananaPage(options: BananaPageOptions): string {
       let turns = Promise.resolve()
       function queueDir(x, y) {
         if (!game.running) return
+        if (socket && socket.readyState === WebSocket.OPEN) { socket.send(JSON.stringify({ type: 'turn', x, y })); return }
+        if (!fallback) return
         turns = turns.then(() => fetch('/banana/room/turn', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ key: secret, x: x, y: y }), signal: AbortSignal.timeout(2000),
@@ -192,12 +194,22 @@ export function bananaPage(options: BananaPageOptions): string {
         joining = true
         myName = nickInput.value.trim().slice(0, 16) || myName
         try {
-          const response = await fetch('/banana/room/join', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ key: secret, name: myName }),
-          })
-          if (!response.ok) throw new Error('Join failed (' + response.status + ').')
-          const joined = await response.json()
+          let joined
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            joined = await new Promise((resolve, reject) => {
+              pendingJoin = { resolve, reject }
+              socket.send(JSON.stringify({ type: 'join', name: myName }))
+              setTimeout(() => reject(new Error('The counter did not answer. Press Start again.')), 5000)
+            })
+          } else {
+            if (!fallback) throw new Error('Connecting to the counter...')
+            const response = await fetch('/banana/room/join', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ key: secret, name: myName }),
+            })
+            if (!response.ok) throw new Error('Join failed (' + response.status + ').')
+            joined = await response.json()
+          }
           try { sessionStorage.setItem('banana-key', secret); localStorage.setItem('banana-key', secret) } catch {}
           myId = joined.id
           joinStep = joined.step
@@ -1059,14 +1071,44 @@ export function bananaPage(options: BananaPageOptions): string {
       function lostConnection() {
         if (game.running) { wasDisconnected = true; connection.hidden = false } else statusEl.textContent = 'Connecting to the counter...'
       }
-      let source
+      let source, socket, pendingJoin
+      let fallback = false, receivedSocket = false, reconnectTimer, openTimer
       let openedAt = 0
       function connect() {
-        if (source) source.close()
+        clearTimeout(reconnectTimer)
+        clearTimeout(openTimer)
+        if (source) { source.close(); source = null }
+        if (socket) { socket.onclose = null; socket.close(); socket = null }
         openedAt = performance.now()
-        source = new EventSource('/banana/room/events?key=' + encodeURIComponent(secret))
-        source.addEventListener('room', onRoom)
-        source.onerror = lostConnection
+        if (fallback) {
+          source = new EventSource('/banana/room/events?key=' + encodeURIComponent(secret))
+          source.addEventListener('room', onRoom)
+          source.onerror = lostConnection
+          return
+        }
+        const url = new URL(location.pathname + '/room/socket', location.href)
+        url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+        url.searchParams.set('key', secret)
+        try { socket = new WebSocket(url) } catch { fallback = true; connect(); return }
+        const current = socket
+        const useFallback = () => { fallback = true; connect() }
+        openTimer = setTimeout(() => { if (current.readyState !== WebSocket.OPEN) useFallback() }, 3000)
+        current.onmessage = event => {
+          receivedSocket = true
+          clearTimeout(openTimer)
+          let data
+          try { data = JSON.parse(event.data) } catch { return }
+          if (data.type === 'joined' && pendingJoin) { pendingJoin.resolve(data); pendingJoin = null }
+          else if (data.type === 'error' && pendingJoin) { pendingJoin.reject(new Error(data.error)); pendingJoin = null }
+          else if (data.players) onRoom(event)
+        }
+        current.onclose = () => {
+          clearTimeout(openTimer)
+          if (pendingJoin) { pendingJoin.reject(new Error('Connection lost.')); pendingJoin = null }
+          lostConnection()
+          if (!receivedSocket) useFallback()
+          else reconnectTimer = setTimeout(connect, 500)
+        }
       }
       connect()
       // A dropped network can leave the stream open but silent for minutes: while playing, updates come several times a second.

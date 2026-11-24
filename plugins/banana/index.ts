@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { Acryl } from '@acryldev/blends'
+import { Acryl, type MiddlewareHandler } from '@acryldev/blends'
 import { streamSSE } from '@acryldev/blends/streaming'
 import type {} from '@acryldev/instance'
 import type {} from '../home/index.ts'
@@ -144,6 +144,41 @@ export function apply(ctx: Context): void {
     streams.clear()
   })
 
+  const attach = (key: string, send: (snapshot?: Snapshot) => void) => {
+    const group = streams.get(key) ?? new Set<typeof send>()
+    group.add(send)
+    streams.set(key, group)
+    disconnected.delete(key)
+    return () => {
+      group.delete(send)
+      if (!group.size) {
+        streams.delete(key)
+        if (world.resume(key).state === 'playing') { disconnected.delete(key); disconnected.set(key, true) }
+      }
+    }
+  }
+  const joinRoom = (key: string, body: unknown) => {
+    if (!body || typeof body !== 'object' || !('name' in body) || typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > NAME_MAX) return { error: 'invalid body', status: 400 } as const
+    if (world.count >= 24 && world.resume(key).state !== 'playing') {
+      const oldest = [...disconnected.keys()].find(key => world.resume(key).state === 'playing')
+      if (oldest) {
+        world.end(oldest, 'Replaced')
+        disconnected.delete(oldest)
+        const snapshot = world.snapshot()
+        for (const group of streams.values()) for (const send of group) send(snapshot)
+      }
+    }
+    const id = world.join(key, body.name.trim())
+    if (!id) return { error: 'the counter is full', status: 429 } as const
+    if (!streams.has(key)) { disconnected.delete(key); disconnected.set(key, true) }
+    startTimer()
+    return { id, step: world.snapshot().step } as const
+  }
+  const turnRoom = (key: string, body: unknown) => {
+    if (!body || typeof body !== 'object' || !('x' in body) || !('y' in body) || typeof body.x !== 'number' || typeof body.y !== 'number' || !Number.isInteger(body.x) || !Number.isInteger(body.y) || Math.abs(body.x) + Math.abs(body.y) !== 1) return 400
+    return world.turn(key, body.x, body.y) ? 204 : 404
+  }
+
   const save = (): void => {
     mkdirSync(ctx.appInstance.home, { recursive: true })
     writeFileSync(`${file}.tmp`, JSON.stringify(scores, null, 2))
@@ -189,15 +224,11 @@ export function apply(ctx: Context): void {
           else closed = true
           resolve?.()
         }
-        const group = streams.get(key) ?? new Set<typeof send>()
-        group.add(send)
-        streams.set(key, group)
-        disconnected.delete(key)
+        const detach = attach(key, send)
         const close = () => {
           if (closed) return
           closed = true
-          group.delete(send)
-          if (!group.size) { streams.delete(key); if (world.resume(key).state === 'playing') { disconnected.delete(key); disconnected.set(key, true) } }
+          detach()
           resolve?.()
         }
         stream.onAbort(close)
@@ -226,30 +257,62 @@ export function apply(ctx: Context): void {
     .post('/room/join', async (c) => {
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
-      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key) || !('name' in body) || typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > NAME_MAX) return c.json({ error: 'invalid body' }, 400)
-      if (world.count >= 24 && world.resume(body.key).state !== 'playing') {
-        const oldest = [...disconnected.keys()].find(key => world.resume(key).state === 'playing')
-        if (oldest) {
-          world.end(oldest, 'Replaced')
-          disconnected.delete(oldest)
-          const snapshot = world.snapshot()
-          for (const group of streams.values()) for (const send of group) send(snapshot)
-        }
-      }
-      const id = world.join(body.key, body.name.trim())
-      if (!id) return c.json({ error: 'the counter is full' }, 429)
-      if (!streams.has(body.key)) { disconnected.delete(body.key); disconnected.set(body.key, true) }
-      startTimer()
-      return c.json({ id, step: world.snapshot().step }, 201)
+      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key)) return c.json({ error: 'invalid body' }, 400)
+      const result = joinRoom(body.key, body)
+      return 'error' in result ? c.json({ error: result.error }, result.status) : c.json(result, 201)
     })
     .post('/room/turn', async (c) => {
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
-      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key) || !('x' in body) || !('y' in body) || typeof body.x !== 'number' || typeof body.y !== 'number' || !Number.isInteger(body.x) || !Number.isInteger(body.y) || Math.abs(body.x) + Math.abs(body.y) !== 1) return c.json({ error: 'invalid body' }, 400)
-      return world.turn(body.key, body.x, body.y) ? c.body(null, 204) : c.json({ error: 'not playing' }, 404)
+      if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key)) return c.json({ error: 'invalid body' }, 400)
+      const status = turnRoom(body.key, body)
+      return status === 204 ? c.body(null, 204) : c.json({ error: status === 400 ? 'invalid body' : 'not playing' }, status)
     })
 
   ctx.router.route('/banana', app)
+
+  ctx.inject(['nodeServer'], (scope) => {
+    const upgrade = scope.nodeServer.upgrades()
+    const sockets = new Acryl().get('/room/socket', (c, next) => {
+      const key = c.req.query('key') ?? ''
+      if (!KEY.test(key)) return c.json({ error: 'invalid key' }, 400)
+      const origin = c.req.header('origin')
+      if (origin) {
+        try { if (new URL(origin).host !== c.req.header('host')) return c.body(null, 403) }
+        catch { return c.body(null, 403) }
+      }
+      return next()
+    }, upgrade((c) => {
+      const key = c.req.query('key') ?? ''
+      let detach = () => {}
+      let pending: Snapshot | undefined
+      return {
+        onOpen(_event, socket) {
+          const send = (snapshot?: Snapshot) => {
+            if (!snapshot) { socket.close(1001, 'Plugin unloaded'); return }
+            pending = mergeSnapshots(pending, snapshot)
+            if (socket.bufferedAmount > 256 * 1024) return
+            socket.send(JSON.stringify(pending))
+            pending = undefined
+          }
+          detach = attach(key, send)
+          send(world.snapshot())
+        },
+        onMessage(event, socket) {
+          if (typeof event.data !== 'string' || Buffer.byteLength(event.data) > 65536) return
+          let body: unknown
+          try { body = JSON.parse(event.data) } catch { return }
+          if (!body || typeof body !== 'object' || !('type' in body)) return
+          if (body.type === 'join') {
+            const result = joinRoom(key, body)
+            socket.send(JSON.stringify('error' in result ? { type: 'error', error: result.error } : { type: 'joined', ...result }))
+          } else if (body.type === 'turn') turnRoom(key, body)
+        },
+        onClose() { detach() },
+      }
+    }, { textOnly: true }) as unknown as MiddlewareHandler)
+    scope.router.route('/banana', sockets)
+  })
 
   ctx.effect(() =>
     ctx.home.widget({

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { runInNewContext } from 'node:vm'
+import { runInNewContext, Script } from 'node:vm'
 import { pinnedInstance, withPort } from '@acryldev/instance'
 import { type App, createApp } from '../src/app.ts'
 import { mergeSnapshots } from '../plugins/banana/index.ts'
@@ -275,4 +275,52 @@ test('browser digestion detects gains and moves a smooth bump from mouth to tail
     assert.equal(bump(0, 750), 0)
     assert.ok(bump(0.6, 750) > 0 && bump(0.6, 750) < 1)
     assert.equal(bump(1, 1500), 0)
+  }))
+
+
+test('websocket room validates, joins, turns and disconnects', async () => {
+  const { testWebSocket } = await import('../plugins/node-server/src/test-websocket.ts')
+  const home = await mkdtemp(join(scratch, 'banana-socket-'))
+  const app = await createApp(withPort(pinnedInstance(home, { root: projectRoot }), 0))
+  const fetch = (request: Request, env: object) => app.root.router.fetch(request, {}, env)
+  const key = 'socket_player_123456789'
+  try {
+    assert.equal((await testWebSocket(fetch, '/banana/room/socket?key=bad')).status, 400)
+    assert.equal((await testWebSocket(fetch, '/banana/room/socket?key=' + key, { headers: { host: 'example.com', origin: 'http://evil.com' } })).status, 403)
+    const result = await testWebSocket(fetch, '/banana/room/socket?key=' + key)
+    assert.equal(result.status, 101)
+    const { socket } = result
+    assert.ok(socket)
+    assert.ok(JSON.parse(socket.received[0]).players)
+    socket.send('bad json')
+    socket.send('x'.repeat(65537))
+    socket.send(JSON.stringify({ type: 'join', name: 'Ada' }))
+    const joined = JSON.parse(socket.received.at(-1)!)
+    assert.equal(joined.type, 'joined')
+    socket.send(JSON.stringify({ type: 'turn', x: 0, y: 1 }))
+    socket.send(JSON.stringify({ type: 'turn', x: 1, y: 1 }))
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.ok(socket.received.some(text => JSON.parse(text).players?.some((p: { id: string }) => p.id === joined.id)))
+    socket.close()
+    const response = await app.root.router.request('/banana/room/resume', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) })
+    assert.equal((await response.json() as { connected: boolean }).connected, false)
+    const next = await testWebSocket(fetch, '/banana/room/socket?key=' + key)
+    assert.ok(next.socket)
+    await app.stop()
+    assert.equal(next.socket.closed?.code, 1001)
+  } finally {
+    await app.stop()
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+
+
+test('the page script is valid JavaScript', () =>
+  withApp(async (app) => {
+    const html = await (await app.root.router.request('/banana')).text()
+    const script = html.match(/<script type="module">([^]*?)<\/script>/)?.[1] ?? ''
+    assert.ok(script.length > 1000)
+    // A module may await at the top level; an async function body parses the same statements.
+    new Script('(async () => {' + script + '\n})')
   }))
