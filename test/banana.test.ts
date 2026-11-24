@@ -281,6 +281,9 @@ test('browser digestion detects gains and moves a smooth bump from mouth to tail
 test('websocket room validates, joins, turns and disconnects', async () => {
   const { testWebSocket } = await import('../plugins/node-server/src/test-websocket.ts')
   const home = await mkdtemp(join(scratch, 'banana-socket-'))
+  // This app listens, and the app running from this folder holds its door.
+  const door = process.env.ACRYL_DOOR
+  process.env.ACRYL_DOOR = 'off'
   const app = await createApp(withPort(pinnedInstance(home, { root: projectRoot }), 0))
   const fetch = (request: Request, env: object) => app.root.router.fetch(request, {}, env)
   const key = 'socket_player_123456789'
@@ -309,6 +312,8 @@ test('websocket room validates, joins, turns and disconnects', async () => {
     await app.stop()
     assert.equal(next.socket.closed?.code, 1001)
   } finally {
+    if (door === undefined) delete process.env.ACRYL_DOOR
+    else process.env.ACRYL_DOOR = door
     await app.stop()
     await rm(home, { recursive: true, force: true })
   }
