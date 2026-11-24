@@ -331,11 +331,23 @@ test('trail interpolation travels evenly through an edge and a corner', async ()
     assert.ok(source)
     const trail = runInNewContext('(' + source + ')') as (p: unknown, b: unknown, size: number, blend: number) => { x: number; y: number }[]
     const row = (from: number, count: number) => Array.from({ length: count }, (_, i) => [from - i, 5])
-    const before = { moved: 4, credit: .75, cells: row(29, 24) }
-    const player = { moved: 6, credit: 0, cells: [[0, 6], [0, 5], ...row(29, 22)] }
-    const short = trail({ moved: 5, credit: 0, cells: [[8, 5], [7, 5]] }, { moved: 4, credit: 0, cells: [[7, 5], [6, 5]] }, 30, 1)
+    const before = { moved: 4, credit: .75, lag: 1, cells: row(29, 24) }
+    const player = { moved: 6, credit: 0, lag: 1, cells: [[0, 6], [0, 5], ...row(29, 22)] }
+    const short = trail({ moved: 5, credit: 0, lag: 0, cells: [[8, 5], [7, 5]] }, { moved: 4, credit: 0, lag: 0, cells: [[7, 5], [6, 5]] }, 30, 1)
     assert.equal(short[0].x, 8, 'a short banana is drawn without delay')
-    const midCell = [0, .25, .5, .75, 1].map(t => trail({ moved: 5, credit: .5, cells: row(20, 24) }, { moved: 4, credit: .25, cells: row(19, 24) }, 30, t)[0].x)
+    const midCell = [0, .25, .5, .75, 1].map(t => trail({ moved: 5, credit: .5, lag: 1, cells: row(20, 24) }, { moved: 4, credit: .25, lag: 1, cells: row(19, 24) }, 30, t)[0].x)
+    // Growing past 20 cells eases the lag in: the head keeps moving forward at every step.
+    const ease = runInNewContext('(' + html.match(/function nextLag\([^]*?\n      }/)?.[0] + ')') as (b: unknown, length: number) => number
+    let from = { moved: 0, credit: 0, lag: ease(undefined, 20), cells: row(10, 20) }
+    let head = 10
+    for (let i = 1; i <= 15; i++) {
+      const to = { moved: i, credit: i * .003, lag: ease(from, 21), cells: row(10 + i, 21) }
+      const x = trail(to, from, 168, 1)[0].x
+      assert.ok(x - head > .85 && x - head < 1.15, 'step ' + i + ' moved ' + (x - head))
+      head = x
+      from = to
+    }
+    assert.equal(from.lag, 1)
     for (let i = 1; i < midCell.length; i++) assert.ok(Math.abs(midCell[i] - midCell[i - 1] - .3125) < 1e-9, 'a long banana never stalls mid-cell')
     const heads = [0, .2, .4, .6, .8, 1].map(t => trail(player, before, 30, t)[0])
     for (let i = 1; i < heads.length; i++) assert.ok(Math.abs(Math.abs(heads[i].x - heads[i-1].x) + Math.abs(heads[i].y - heads[i-1].y) - .25) < 1e-9)

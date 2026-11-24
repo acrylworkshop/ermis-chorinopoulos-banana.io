@@ -815,6 +815,12 @@ export function bananaPage(options: BananaPageOptions): string {
         return (((a - b + size / 2) % size + size) % size) - size / 2
       }
 
+      /** Up to 20 cells a banana moves exactly one cell per step and is drawn without delay; a faster one needs one cell of lag to glide evenly, eased in. */
+      function nextLag(before, length) {
+        const target = length > 20 ? 1 : 0
+        return before ? Math.max(before.lag - 0.1, Math.min(before.lag + 0.1, target)) : target
+      }
+
       function trailCells(player, before, size, blend) {
         const wrapDelta = (a, b) => (((a - b + size / 2) % size + size) % size) - size / 2
         const raw = player.cells.map(c => ({ x: c[0], y: c[1] }))
@@ -835,8 +841,8 @@ export function bananaPage(options: BananaPageOptions): string {
           points[i].y = points[i - 1].y + wrapDelta(trail[i][1], trail[i - 1][1])
         }
         const position = before.moved + before.credit + (player.moved + player.credit - before.moved - before.credit) * Math.max(0, Math.min(1, blend))
-        // Up to 20 cells a banana moves exactly one cell per step and is drawn without delay; a faster one needs one cell of lag to glide evenly.
-        const offset = Math.max(0, player.moved - position + (player.cells.length > 20 ? 1 : 0))
+        const lag = before.lag + (player.lag - before.lag) * Math.max(0, Math.min(1, blend))
+        const offset = Math.max(0, player.moved - position + lag)
         return raw.map((cell, i) => {
           const at = i + offset, index = Math.floor(at), fraction = at - index
           const from = points[Math.min(index, points.length - 1)], to = points[Math.min(index + 1, points.length - 1)]
@@ -1048,6 +1054,7 @@ export function bananaPage(options: BananaPageOptions): string {
         latest = data
         receivedAt = performance.now()
         const players = new Map(data.players.map(p => [p.id, p]))
+        for (const p of data.players) p.lag = nextLag(previous.players.find(q => q.id === p.id && q.moved <= p.moved), p.cells.length)
         for (const id of bulges.keys()) {
           const before = previous.players.find(p => p.id === id)
           const current = players.get(id)
