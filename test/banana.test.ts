@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { pinnedInstance, withPort } from '@acryldev/instance'
 import { type App, createApp } from '../src/app.ts'
 import { mergeSnapshots } from '../plugins/banana/index.ts'
@@ -250,3 +251,28 @@ test('growth keeps bodies contiguous across either old edge and preserves ordina
   }
 })
 
+
+test('browser digestion detects gains and moves a smooth bump from mouth to tail', () =>
+  withApp(async (app) => {
+    const html = await (await app.root.router.request('/banana')).text()
+    function pageFunction(name: string): (...args: unknown[]) => number {
+      const source = html.match(new RegExp('function ' + name + '\\([^]*?\\n      }'))?.[0]
+      assert.ok(source, name + ' is present in the page')
+      return runInNewContext('(' + source + ')') as (...args: unknown[]) => number
+    }
+    const detect = pageFunction('detectBulge')
+    const bump = pageFunction('bulgeBump')
+    const before = { id: 'a', score: 10, cells: [1, 2, 3] }
+    assert.equal(detect(before, { ...before, score: 20 }), 0.35)
+    assert.equal(detect(before, { ...before, score: 60 }), 0.35, 'a doubled sugar is food')
+    assert.equal(detect(before, { ...before, score: 70 }), 0.7, 'the smallest eaten banana')
+    assert.equal(detect(before, { ...before, cells: [1, 2, 3, 4] }), 0, 'growing over the next steps is not another meal')
+    assert.equal(detect(before, { ...before, id: 'b', score: 50 }), 0)
+    assert.equal(detect(before, { ...before, score: 0, cells: [1, 2, 3, 4] }), 0)
+    assert.equal(detect(undefined, before), 0)
+    assert.equal(bump(0, 0), 1)
+    assert.equal(bump(0.5, 750), 1)
+    assert.equal(bump(0, 750), 0)
+    assert.ok(bump(0.6, 750) > 0 && bump(0.6, 750) < 1)
+    assert.equal(bump(1, 1500), 0)
+  }))

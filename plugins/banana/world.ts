@@ -157,6 +157,6 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       if (!players.size) { size = MIN_SIZE; peak = 0; foods = foods.filter(f => f.x < size && f.y < size) }
       refill()
     },
-    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe, safe: tick < p.safeUntil })), ended: ended.map(e => ({ ...e })) } },
+    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe, safe: tick <= p.safeUntil })), ended: ended.map(e => ({ ...e })) } },
   }
 }

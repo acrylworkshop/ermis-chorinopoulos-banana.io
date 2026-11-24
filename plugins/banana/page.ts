@@ -391,7 +391,23 @@ export function bananaPage(options: BananaPageOptions): string {
         return CELL * (0.2 + 0.29 * Math.sin(Math.PI * Math.pow(tuck, 0.85)))
       }
 
-      function drawBanana(cells, ripe, alpha, label) {
+      function bulgeBump(position, elapsed) {
+        if (elapsed < 0 || elapsed >= 1500) return 0
+        const distance = Math.abs(position - elapsed / 1500)
+        return distance < 0.2 ? (1 + Math.cos(Math.PI * distance / 0.2)) / 2 : 0
+      }
+
+      function detectBulge(before, player) {
+        if (!before || before.id !== player.id || player.score < before.score) return 0
+        const gain = player.score - before.score
+        // The smallest banana is 6 cells, worth 60 points; the best food is worth 50.
+        return gain > 0 ? (gain >= 60 ? 0.7 : 0.35) : 0
+      }
+
+      const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+      const bulges = new Map()
+
+      function drawBanana(cells, ripe, alpha, label, player, time) {
         if (!cells.length) return
         view.globalAlpha = alpha
         const points = []
@@ -402,6 +418,15 @@ export function bananaPage(options: BananaPageOptions): string {
         for (const run of runs) total += runLength(run)
         if (total < 1) total = 1
 
+        const active = bulges.get(player.id) || []
+        function widthAt(t) {
+          let bump = 0
+          for (const bulge of active) {
+            const elapsed = time - bulge.start
+            if (elapsed < 1500) bump += bulge.amount * bulgeBump(1 - t, reducedMotion.matches ? 0 : elapsed)
+          }
+          return radiusAt(t) * (1 + bump)
+        }
         const samples = []
         const ridgeLight = []
         const ridgeShade = []
@@ -412,7 +437,7 @@ export function bananaPage(options: BananaPageOptions): string {
           const shaded = []
           for (const sample of runSamples) {
             samples.push(sample)
-            const r = radiusAt(sample.t)
+            const r = widthAt(sample.t)
             lit.push({ x: sample.x + sample.nx * r * 0.6, y: sample.y + sample.ny * r * 0.6 })
             shaded.push({ x: sample.x - sample.nx * r * 0.78, y: sample.y - sample.ny * r * 0.78 })
           }
@@ -451,13 +476,13 @@ export function bananaPage(options: BananaPageOptions): string {
         for (let i = 0; i < samples.length; i += 1) {
           view.fillStyle = edges[i]
           view.beginPath()
-          view.arc(samples[i].x, samples[i].y, radiusAt(samples[i].t) + 1.6 * UNIT, 0, Math.PI * 2)
+          view.arc(samples[i].x, samples[i].y, widthAt(samples[i].t) + 1.6 * UNIT, 0, Math.PI * 2)
           view.fill()
         }
         for (let i = 0; i < samples.length; i += 1) {
           view.fillStyle = bases[i]
           view.beginPath()
-          view.arc(samples[i].x, samples[i].y, radiusAt(samples[i].t), 0, Math.PI * 2)
+          view.arc(samples[i].x, samples[i].y, widthAt(samples[i].t), 0, Math.PI * 2)
           view.fill()
         }
 
@@ -651,6 +676,21 @@ export function bananaPage(options: BananaPageOptions): string {
           view.fillText(label, x, y)
           view.textAlign = 'left'
         }
+        if (ripe > 85) {
+          const seed = Array.from(player.id).reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
+          const center = samples[Math.floor(samples.length / 2)]
+          for (let i = 0; i < 4; i++) {
+            const angle = seed + i * Math.PI / 2 + (reducedMotion.matches ? 0 : time * (0.001 + i * 0.0003))
+            const x = center.x + Math.cos(angle) * (20 + i * 5) * UNIT
+            const y = center.y + Math.sin(angle) * (14 + i * 4) * UNIT
+            const wing = reducedMotion.matches ? 2 : 1 + Math.abs(Math.sin(time * 0.02 + i)) * 2
+            view.fillStyle = 'rgba(225, 230, 218, 0.75)'
+            view.beginPath(); view.ellipse(x - 2 * UNIT, y - 2 * UNIT, 2 * UNIT, wing * UNIT, -0.5, 0, Math.PI * 2); view.fill()
+            view.beginPath(); view.ellipse(x + 2 * UNIT, y - 2 * UNIT, 2 * UNIT, wing * UNIT, 0.5, 0, Math.PI * 2); view.fill()
+            view.fillStyle = '#211b14'
+            view.beginPath(); view.arc(x, y, 1.6 * UNIT, 0, Math.PI * 2); view.fill()
+          }
+        }
         view.globalAlpha = 1
       }
 
@@ -812,7 +852,7 @@ export function bananaPage(options: BananaPageOptions): string {
           for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
             const shown = cells.map(c => ({ x: c.x + shiftX + dx, y: c.y + shiftY + dy }))
             if (shown.some(c => c.x >= -1 && c.x < COLS + 1 && c.y >= -1 && c.y < ROWS + 1))
-              drawBanana(shown, player.ripe, player.safe ? 0.5 : 1, player.name + ' (' + player.cells.length + ')')
+              drawBanana(shown, player.ripe, player.safe ? 0.5 : 1, player.name + ' (' + player.cells.length + ')', player, time)
           }
           const dx = delta(cells[0].x, camera.x, size), dy = delta(cells[0].y, camera.y, size)
           if (size > 30 && player.id !== myId && (Math.abs(dx) > 15 || Math.abs(dy) > 15)) {
@@ -960,6 +1000,20 @@ export function bananaPage(options: BananaPageOptions): string {
         previous = latest
         latest = data
         receivedAt = performance.now()
+        const players = new Map(data.players.map(p => [p.id, p]))
+        for (const id of bulges.keys()) {
+          const before = previous.players.find(p => p.id === id)
+          const current = players.get(id)
+          if (!current || !before || current.score < before.score || data.ended.some(p => p.id === id)) bulges.delete(id)
+        }
+        for (const current of data.players) {
+          const before = previous.players.find(p => p.id === current.id)
+          const amount = data.ended.some(p => p.id === current.id) ? 0 : detectBulge(before, current)
+          const active = (bulges.get(current.id) || []).filter(b => receivedAt - b.start < 1500)
+          if (amount) active.push({ start: receivedAt, amount: amount })
+          if (active.length) bulges.set(current.id, active.slice(-6))
+          else bulges.delete(current.id)
+        }
         const player = data.players.find(p => p.id === myId)
         const ended = data.ended.find(p => p.id === myId)
         if (game.running && player) {
