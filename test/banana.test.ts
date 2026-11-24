@@ -335,6 +335,8 @@ test('trail interpolation travels evenly through an edge and a corner', async ()
     const player = { moved: 6, credit: 0, cells: [[0, 6], [0, 5], ...row(29, 22)] }
     const short = trail({ moved: 5, credit: 0, cells: [[8, 5], [7, 5]] }, { moved: 4, credit: 0, cells: [[7, 5], [6, 5]] }, 30, 1)
     assert.equal(short[0].x, 8, 'a short banana is drawn without delay')
+    const midCell = [0, .25, .5, .75, 1].map(t => trail({ moved: 5, credit: .5, cells: row(20, 24) }, { moved: 4, credit: .25, cells: row(19, 24) }, 30, t)[0].x)
+    for (let i = 1; i < midCell.length; i++) assert.ok(Math.abs(midCell[i] - midCell[i - 1] - .3125) < 1e-9, 'a long banana never stalls mid-cell')
     const heads = [0, .2, .4, .6, .8, 1].map(t => trail(player, before, 30, t)[0])
     for (let i = 1; i < heads.length; i++) assert.ok(Math.abs(Math.abs(heads[i].x - heads[i-1].x) + Math.abs(heads[i].y - heads[i-1].y) - .25) < 1e-9)
   })
