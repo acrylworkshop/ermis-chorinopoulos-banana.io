@@ -1,3 +1,12 @@
+# Ripe
+
+![Mango eats fruit, swallows a smaller banana, then a rotten one, while a bigger banana glides past](docs/ripe.gif)
+
+A multiplayer banana game: eat fruit to stay fresh, grow, and swallow smaller bananas before you rot. The counter grows
+as more players join.
+
+Run `npm install` and `npm run dev`, then press **Play Ripe**. Steer with the arrow keys, WASD or swipes.
+
 # ermis-chorinopoulos-banana.io
 
 A Cordis app on Node, scaffolded by `acrylblends init`. TypeScript, run by Node with no build step. Every part is a
