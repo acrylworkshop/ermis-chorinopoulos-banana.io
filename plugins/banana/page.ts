@@ -73,7 +73,7 @@ export function bananaPage(options: BananaPageOptions): string {
     <main class="wrap">
       <header>
         <h1>Ripe<span>.</span></h1>
-        <p class="tag">Grow the banana. Stay golden. Do not go brown.</p>
+        <p class="tag">Grow the banana. Bigger bananas eat smaller ones. Stay golden. Do not go brown.</p>
       </header>
       <section class="hud" aria-label="Score">
         <div><span class="label">Score</span><strong id="banana-score">0</strong></div>
@@ -113,7 +113,7 @@ export function bananaPage(options: BananaPageOptions): string {
         <h2>Top bananas</h2>
         <ol id="banana-board"><li>No scores yet.</li></ol>
       </section>
-      <p class="legend">Eating makes the banana fresher. Grape +10 points, -8 ripeness. Sugar +25 points, -15 ripeness. Frost +5 points, -28 ripeness, no growth.</p>
+      <p class="legend">Bigger bananas eat smaller ones. Eating makes the banana fresher. Grape +10 points, -8 ripeness. Sugar +25 points, -15 ripeness. Frost +5 points, -28 ripeness, no growth.</p>
     </main>
     <script type="module">
       const canvas = document.getElementById('banana-canvas')
@@ -812,7 +812,7 @@ export function bananaPage(options: BananaPageOptions): string {
           for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
             const shown = cells.map(c => ({ x: c.x + shiftX + dx, y: c.y + shiftY + dy }))
             if (shown.some(c => c.x >= -1 && c.x < COLS + 1 && c.y >= -1 && c.y < ROWS + 1))
-              drawBanana(shown, player.ripe, 1, player.name)
+              drawBanana(shown, player.ripe, player.safe ? 0.5 : 1, player.name + ' (' + player.cells.length + ')')
           }
           const dx = delta(cells[0].x, camera.x, size), dy = delta(cells[0].y, camera.y, size)
           if (size > 30 && player.id !== myId && (Math.abs(dx) > 15 || Math.abs(dy) > 15)) {
@@ -910,14 +910,14 @@ export function bananaPage(options: BananaPageOptions): string {
         }
       } catch { secret = newKey() }
       const connection = document.getElementById('banana-connection')
-      function endingText(reason, away) {
-        const text = reason === 'Tangle!' ? 'Your banana tied itself in a knot' : reason === 'Replaced' ? 'Your place was given to someone else because the counter was full' : 'Your banana went rotten'
+      function endingText(reason, away, by) {
+        const text = reason === 'Eaten!' ? 'Your banana was eaten by ' + by : reason === 'Tangle!' ? 'Your banana tied itself in a knot' : reason === 'Replaced' ? 'Your place was given to someone else because the counter was full' : 'Your banana went rotten'
         return text + (away ? ' while you were away.' : '.')
       }
       function endedWhileAway(result) {
         game.score = result.score
         game.snake = Array(result.length)
-        finish('While you were away', endingText(result.reason, true))
+        finish('While you were away', endingText(result.reason, true, result.by))
         saveForm.hidden = false
         startBtn.textContent = 'Start over'
         hud()
@@ -973,7 +973,7 @@ export function bananaPage(options: BananaPageOptions): string {
         } else if (game.running && !joining && (seenPlayer || data.step > joinStep)) {
           if (ended) {
             if (wasDisconnected) endedWhileAway(ended)
-            else { game.score = ended.score; game.snake = Array(ended.length); finish(ended.reason, endingText(ended.reason, false)) }
+            else { game.score = ended.score; game.snake = Array(ended.length); finish(ended.reason, endingText(ended.reason, false, ended.by)) }
             wasDisconnected = false
           } else if (!checkingResume) {
             checkingResume = true

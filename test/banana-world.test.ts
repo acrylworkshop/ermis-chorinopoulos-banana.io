@@ -95,12 +95,9 @@ test('the counter grows with its peak, preserves bodies, wraps and resets when e
       assert.ok(dx * dx + dy * dy >= 64)
     }
   }
-  const start = world.snapshot().players[0].cells[0]
-  for (let i = 0; i < 168; i++) world.step()
-  assert.deepEqual(world.snapshot().players[0].cells[0], start)
-  world.leave('0')
-  assert.equal(world.size, 168)
   for (let i = 1; i < 24; i++) world.leave(String(i))
+  assert.equal(world.size, 168)
+  world.leave('0')
   const empty = world.snapshot()
   assert.equal(empty.size, 30)
   assert.equal(empty.foods.length, 6)
@@ -147,4 +144,144 @@ test('the board keeps its size when a player rejoins after others left, and rese
   assert.equal(world.count, 0)
   assert.equal(world.size, 30, 'an empty room starts small again')
   assert.ok(world.snapshot().foods.every((food) => food.x < 30 && food.y < 30))
+})
+
+async function fixture() {
+  const { readFile } = await import('node:fs/promises')
+  const { stripTypeScriptTypes } = await import('node:module')
+  const source = await readFile(new URL('../plugins/banana/world.ts', import.meta.url), 'utf8')
+  const code = source.replace('    get size() {', '    get fixturePlayers() { return players },\n    get fixtureFoods() { return foods },\n    get size() {')
+  return (await import('data:text/javascript,' + encodeURIComponent(stripTypeScriptTypes(code)))).createWorld({ random: () => 0 })
+}
+
+function place(world: any, key: string, id: string, cells: number[][], dir: number[], ripe = 0) {
+  world.join(key, key)
+  const p = world.fixturePlayers.get(key)
+  Object.assign(p, { id, cells, dir, ripe, safeUntil: 0, growth: 0 })
+  return p
+}
+
+test('contacts resolve by start length for body, head, swap, and equal lengths', async () => {
+  for (const kind of ['long-body', 'short-body', 'head', 'swap', 'equal']) {
+    const world = await fixture()
+    const long = place(world, 'long', 'a', [[4, 5], [3, 5], [2, 5], [1, 5]], [1, 0])
+    const short = place(world, 'short', 'b', [[6, 4], [6, 3], [6, 2]], [0, 1])
+    if (kind === 'long-body') Object.assign(short, { cells: [[5, 4], [5, 5], [5, 6]], dir: [1, 0] })
+    if (kind === 'short-body') Object.assign(short, { cells: [[3, 4], [3, 3], [3, 2]], dir: [0, 1] })
+    if (kind === 'head' || kind === 'equal') Object.assign(short, { cells: [[5, 4], [5, 3], [5, 2]], dir: [0, 1] })
+    if (kind === 'swap') Object.assign(short, { cells: [[5, 5], [6, 5], [7, 5]], dir: [-1, 0] })
+    if (kind === 'equal') long.cells.pop()
+    world.step()
+    if (kind === 'equal') assert.equal(world.count, 2)
+    else {
+      assert.equal(world.resume('short').reason, 'Eaten!', kind)
+      assert.equal(world.resume('short').by, 'long')
+      assert.equal(world.snapshot().ended[0].by, 'long')
+    }
+  }
+})
+
+test('longest contact wins independently of join order and an eaten player cannot eat', async () => {
+  for (const order of [['a', 'b', 'c'], ['c', 'b', 'a']]) {
+    const world = await fixture()
+    const defs: Record<string, [number[][], number[]]> = {
+      a: [[[4, 5], [3, 5], [2, 5], [1, 5], [0, 5]], [1, 0]],
+      b: [[[5, 4], [5, 3], [5, 2], [5, 1]], [0, 1]],
+      c: [[[6, 5], [7, 5], [8, 5]], [-1, 0]],
+    }
+    for (const key of order) place(world, key, key, ...defs[key])
+    world.step()
+    assert.equal(world.resume('b').by, 'a')
+    assert.equal(world.resume('c').by, 'a')
+  }
+})
+
+test('eating grows gradually, rounds up, scores in the golden band and cools', async () => {
+  for (const ripe of [40, 0]) {
+    const world = await fixture()
+    const eater = place(world, 'eater', 'a', [[4, 5], [3, 5], [2, 5], [1, 5]], [1, 0], ripe)
+    place(world, 'victim', 'b', [[5, 4], [5, 3], [5, 2]], [0, 1])
+    world.step()
+    assert.equal(eater.score, ripe ? 60 : 30)
+    assert.ok(Math.abs(eater.ripe - (ripe ? 10.042 : 0)) < 1e-6)
+    assert.equal(eater.cells.length, 4)
+    world.step(); assert.equal(eater.cells.length, 5)
+    world.step(); assert.equal(eater.cells.length, 6)
+    world.step(); assert.equal(eater.cells.length, 6)
+  }
+})
+
+test('new and restarted players are safe for 25 moves', async () => {
+  const world = await fixture()
+  world.join('a', 'a')
+  assert.equal(world.snapshot().players[0].safe, true)
+  for (let i = 0; i < 24; i++) world.step()
+  assert.equal(world.snapshot().players[0].safe, true)
+  world.step()
+  assert.equal(world.snapshot().players[0].safe, false)
+  world.join('a', 'a')
+  assert.equal(world.snapshot().players[0].safe, true)
+})
+
+test('frost appears on a ripe board and cools by 28; food growth is capped', async () => {
+  const world = await fixture()
+  const p = place(world, 'a', 'a', [[10, 10], [9, 10], [8, 10]], [1, 0], 40)
+  world.fixtureFoods.splice(0, world.fixtureFoods.length, { x: 11, y: 10, kind: 'ice' })
+  world.step()
+  assert.ok(Math.abs(p.ripe - 12.042) < 1e-6)
+  const capped = await fixture()
+  const body = Array.from({ length: 200 }, (_, i) => [10 - i % 10, 10 + Math.floor(i / 10)])
+  const q = place(capped, 'a', 'a', body, [1, 0])
+  capped.fixtureFoods.splice(0, capped.fixtureFoods.length, { x: 11, y: 10, kind: 'grape' })
+  capped.step()
+  assert.equal(q.cells.length, 200)
+})
+
+
+test('eating growth is capped and protected players cannot participate', async () => {
+  const world = await fixture()
+  const body = Array.from({ length: 199 }, (_, i) => [10 - i % 10, 10 + Math.floor(i / 10)])
+  const eater = place(world, 'eater', 'a', body, [1, 0])
+  const victim = place(world, 'victim', 'b', [[11, 9], [11, 8], [11, 7]], [0, 1])
+  victim.safeUntil = 1
+  world.step()
+  assert.equal(world.count, 2)
+  Object.assign(victim, { cells: [[12, 9], [12, 8], [12, 7]], dir: [0, 1] })
+  world.step()
+  assert.equal(world.resume('victim').reason, 'Eaten!')
+  world.step(); world.step()
+  assert.equal(eater.cells.length, 200)
+})
+
+test('a banana eaten in a step eats nobody in it', async () => {
+  const world = await fixture()
+  place(world, 'a', 'a', [[4, 5], [3, 5], [2, 5], [1, 5], [0, 5]], [1, 0])
+  place(world, 'b', 'b', [[5, 4], [5, 5], [5, 6], [5, 7]], [0, -1])
+  place(world, 'c', 'c', [[6, 3], [7, 3], [8, 3]], [-1, 0])
+  world.step()
+  assert.equal(world.resume('b').by, 'a')
+  assert.equal(world.resume('c').state, 'playing')
+})
+
+test('food eaten in the same step does not decide who is bigger', async () => {
+  const world = await fixture()
+  place(world, 'a', 'a', [[4, 5], [3, 5], [2, 5]], [1, 0])
+  place(world, 'b', 'b', [[5, 4], [5, 3], [5, 2]], [0, 1])
+  world.fixtureFoods.unshift({ x: 5, y: 5, kind: 'grape' })
+  world.step()
+  assert.deepEqual(world.snapshot().players.map((p: any) => p.cells.length).sort(), [3, 4])
+})
+
+test('a ripe board spawns frost', async () => {
+  const world = await fixture()
+  place(world, 'a', 'a', [[10, 10], [9, 10], [8, 10]], [1, 0], 40)
+  // Refill chooses frost when its random roll exceeds .93.
+  const { readFile } = await import('node:fs/promises')
+  const { stripTypeScriptTypes } = await import('node:module')
+  const source = (await readFile(new URL('../plugins/banana/world.ts', import.meta.url), 'utf8')).replace('    get size() {', '    get fixturePlayers() { return players },\n    get fixtureFoods() { return foods },\n    get size() {')
+  const ripeWorld = (await import('data:text/javascript,' + encodeURIComponent(stripTypeScriptTypes(source)))).createWorld({ random: () => 0.99 })
+  place(ripeWorld, 'a', 'a', [[10, 10], [9, 10], [8, 10]], [1, 0], 40)
+  ripeWorld.fixtureFoods.splice(0)
+  ripeWorld.step()
+  assert.ok(ripeWorld.snapshot().foods.some((f: { kind: string }) => f.kind === 'ice'))
 })

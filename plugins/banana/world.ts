@@ -2,7 +2,7 @@ export const STEP_MS = 120
 const MIN_SIZE = 30
 type Cell = [number, number]
 type Food = { x: number; y: number; kind: 'grape' | 'sugar' | 'ice' }
-type Player = { id: string; name: string; cells: Cell[]; score: number; ripe: number; dir: Cell; queue: Cell[] }
+type Player = { id: string; name: string; cells: Cell[]; score: number; ripe: number; dir: Cell; queue: Cell[]; safeUntil: number; growth: number }
 
 export function createWorld({ random = Math.random }: { random?: () => number } = {}) {
   const players = new Map<string, Player>()
@@ -10,12 +10,12 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
   let size = MIN_SIZE
   let peak = 0
   let tick = 0
-  let ended: { id: string; reason: string; score: number; length: number }[] = []
-  const endings = new Map<string, { reason: string; score: number; length: number; name: string }>()
-  const end = (key: string, reason: string) => {
+  let ended: { id: string; reason: string; score: number; length: number; by?: string }[] = []
+  const endings = new Map<string, { reason: string; score: number; length: number; name: string; by?: string }>()
+  const end = (key: string, reason: string, by?: string) => {
     const p = players.get(key)
     if (!p) return
-    const result = { reason, score: p.score, length: p.cells.length, name: p.name }
+    const result = { reason, score: p.score, length: p.cells.length, name: p.name, ...(by === undefined ? {} : { by }) }
     endings.delete(key)
     endings.set(key, result)
     if (endings.size > 200) endings.delete(endings.keys().next().value!)
@@ -80,7 +80,7 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       peak = nextPeak
       const [x, y] = spot
       const id = old?.id ?? crypto.randomUUID()
-      players.set(key, { id, name, cells: Array.from({ length: 6 }, (_, i) => [(x - i + size) % size, y]), score: 0, ripe: 0, dir: [1, 0], queue: [] })
+      players.set(key, { id, name, cells: Array.from({ length: 6 }, (_, i) => [(x - i + size) % size, y]), score: 0, ripe: 0, dir: [1, 0], queue: [], safeUntil: tick + 25, growth: 0 })
       refill()
       return id
     },
@@ -104,7 +104,8 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
     step() {
       tick++
       ended = []
-      for (const [key, p] of players) {
+      const starts = new Map([...players].map(([key, p]) => [key, { length: p.cells.length }] as const))
+      for (const [key, p] of [...players].sort((a, b) => a[1].id < b[1].id ? -1 : a[1].id > b[1].id ? 1 : 0)) {
         p.ripe = Math.min(100, p.ripe + .00035 * STEP_MS)
         p.dir = p.queue.shift() ?? p.dir
         const head: Cell = [(p.cells[0][0] + p.dir[0] + size) % size, (p.cells[0][1] + p.dir[1] + size) % size]
@@ -112,7 +113,7 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
         if (!reason) {
           p.cells.unshift(head)
           const index = foods.findIndex(f => f.x === head[0] && f.y === head[1])
-          if (index < 0) p.cells.pop()
+          if (index < 0) { if (p.growth > 0 && p.cells.length <= 200) p.growth--; else p.cells.pop() }
           else {
             const [food] = foods.splice(index, 1)
             const multiplier = p.ripe >= 25 && p.ripe <= 60 ? 2 : 1
@@ -123,9 +124,39 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
         }
         if (reason) end(key, reason)
       }
+      const cells = new Map<number, string[]>()
+      for (const [key, p] of players) if (tick > p.safeUntil) for (const [x, y] of p.cells) {
+        const cell = y * size + x
+        const occupants = cells.get(cell) ?? []
+        occupants.push(key)
+        cells.set(cell, occupants)
+      }
+      const contacts: { eater: string; victim: string; length: number; id: string }[] = []
+      const contact = (a: string, b: string) => {
+        if (a === b) return
+        const pa = players.get(a)!, pb = players.get(b)!
+        const la = starts.get(a)!.length, lb = starts.get(b)!.length
+        if (la === lb) return
+        const eater = la > lb ? a : b, victim = la > lb ? b : a
+        contacts.push({ eater, victim, length: Math.max(la, lb), id: (la > lb ? pa : pb).id })
+      }
+      for (const [key, p] of players) if (tick > p.safeUntil) {
+        const [x, y] = p.cells[0]
+        for (const other of cells.get(y * size + x) ?? []) contact(key, other)
+      }
+      contacts.sort((a, b) => b.length - a.length || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || (players.get(a.victim)!.id < players.get(b.victim)!.id ? -1 : 1))
+      for (const { eater, victim } of contacts) {
+        const p = players.get(eater), v = players.get(victim)
+        if (!p || !v) continue
+        const length = starts.get(victim)!.length
+        p.growth += Math.ceil(length / 2)
+        p.score += 10 * length * (p.ripe >= 25 && p.ripe <= 60 ? 2 : 1)
+        p.ripe = Math.max(0, p.ripe - 30)
+        end(victim, 'Eaten!', p.name)
+      }
       if (!players.size) { size = MIN_SIZE; peak = 0; foods = foods.filter(f => f.x < size && f.y < size) }
       refill()
     },
-    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe })), ended: ended.map(e => ({ ...e })) } },
+    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe, safe: tick < p.safeUntil })), ended: ended.map(e => ({ ...e })) } },
   }
 }
