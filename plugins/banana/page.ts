@@ -1032,7 +1032,7 @@ export function bananaPage(options: BananaPageOptions): string {
         const check = setInterval(async () => {
           if (recoveryStopped || game.running || joining || tries-- <= 0) { clearInterval(check); return }
           const result = await resume(elsewhere).catch(() => null)
-          if (result && result.state === 'playing' && !result.connected && !recoveryStopped && !game.running && !joining) {
+          if (result && (result.state === 'playing' || (sameTab && result.state === 'ended')) && !result.connected && !recoveryStopped && !game.running && !joining) {
             clearInterval(check)
             if (sameTab) {
               try { sessionStorage.setItem('banana-key', elsewhere); location.reload() } catch {}
