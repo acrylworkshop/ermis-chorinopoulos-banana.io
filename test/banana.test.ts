@@ -353,3 +353,20 @@ test('trail interpolation travels evenly through an edge and a corner', async ()
     for (let i = 1; i < heads.length; i++) assert.ok(Math.abs(Math.abs(heads[i].x - heads[i-1].x) + Math.abs(heads[i].y - heads[i-1].y) - .25) < 1e-9)
   })
 })
+
+test('the counter steps every 120 ms on average, not a little slower', () =>
+  withApp(async (app) => {
+    const post = (path: string, body: unknown) =>
+      app.root.router.request('/banana/room/' + path, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      })
+    const key = 'beat_key_1234567890'
+    const step = async () => ((await (await post('resume', { key })).json()) as { step: number }).step
+    assert.equal((await post('join', { key, name: 'Beat' })).status, 201)
+    while ((await step()) < 2) await new Promise((resolve) => setTimeout(resolve, 5))
+    const first = await step()
+    const start = performance.now()
+    while ((await step()) < first + 25) await new Promise((resolve) => setTimeout(resolve, 3))
+    const perStep = (performance.now() - start) / 25
+    assert.ok(Math.abs(perStep - 120) < 2.5, perStep.toFixed(1) + ' ms per step')
+  }))

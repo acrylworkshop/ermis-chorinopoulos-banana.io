@@ -451,6 +451,7 @@ export function bananaPage(options: BananaPageOptions): string {
         let walked = 0
         for (const run of runs) {
           const runSamples = ribbonPoints(run, 4, walked, total)
+          if (runSamples.length) runSamples[0].first = true
           const lit = []
           const shaded = []
           for (const sample of runSamples) {
@@ -482,36 +483,39 @@ export function bananaPage(options: BananaPageOptions): string {
         }
         view.restore()
 
-        // Every part of the peel has its own ripeness: greener at the stem, riper toward the tip, as a real banana does.
-        const bases = []
-        const edges = []
-        for (const sample of samples) {
-          const local = Math.max(0, Math.min(100, ripe - (1 - sample.t) * 15))
-          bases.push(bananaColor(local, -9 * rot, -11 * rot))
-          edges.push(bananaColor(local, -15 - 6 * rot, -9))
+        // Round-capped strokes cover what a disc at every sample would, in a few dozen paints instead of thousands.
+        const bands = Math.max(1, Math.min(active.length ? 120 : 48, samples.length - 1))
+        const far = 4 * CELL
+        const hidden = (p) => p.x < -far || p.y < -far || p.x > canvas.width + far || p.y > canvas.height + far
+        function paintBands(colorAt, widthOf, shift, cap) {
+          view.lineCap = cap
+          view.lineJoin = 'round'
+          for (let band = 0; band < bands; band += 1) {
+            const from = Math.floor(band * (samples.length - 1) / bands)
+            const to = Math.floor((band + 1) * (samples.length - 1) / bands)
+            const mid = samples[(from + to) >> 1]
+            if (hidden(samples[from]) && hidden(mid) && hidden(samples[to])) continue
+            view.strokeStyle = colorAt(mid.t)
+            view.lineWidth = 2 * widthOf(mid.t)
+            view.beginPath()
+            for (let i = from; i <= to; i += 1) {
+              const point = samples[i]
+              const before = samples[i - 1]
+              // Only the ends and the turns of a straight piece matter.
+              if (i !== from && i !== to && !point.first && before.nx === point.nx && before.ny === point.ny) continue
+              const r = shift ? shift * radiusAt(point.t) : 0
+              if (i === from || point.first) view.moveTo(point.x + point.nx * r, point.y + point.ny * r)
+              view.lineTo(point.x + point.nx * r, point.y + point.ny * r)
+            }
+            view.stroke()
+          }
         }
-
-        for (let i = 0; i < samples.length; i += 1) {
-          view.fillStyle = edges[i]
-          view.beginPath()
-          view.arc(samples[i].x, samples[i].y, widthAt(samples[i].t) + 1.6 * UNIT, 0, Math.PI * 2)
-          view.fill()
-        }
-        for (let i = 0; i < samples.length; i += 1) {
-          view.fillStyle = bases[i]
-          view.beginPath()
-          view.arc(samples[i].x, samples[i].y, widthAt(samples[i].t), 0, Math.PI * 2)
-          view.fill()
-        }
-
+        const local = (t) => Math.max(0, Math.min(100, ripe - (1 - t) * 15))
+        paintBands((t) => bananaColor(local(t), -15 - 6 * rot, -9), (t) => widthAt(t) + 1.6 * UNIT, 0, 'round')
+        paintBands((t) => bananaColor(local(t), -9 * rot, -11 * rot), widthAt, 0, 'round')
         view.globalAlpha = alpha * 0.4 * (1 - rot * 0.75)
-        view.fillStyle = shine
-        for (const sample of samples) {
-          const r = radiusAt(sample.t)
-          view.beginPath()
-          view.arc(sample.x + sample.nx * r * 0.36, sample.y + sample.ny * r * 0.36, r * 0.54, 0, Math.PI * 2)
-          view.fill()
-        }
+        paintBands(() => shine, (t) => radiusAt(t) * 0.54, 0.36, 'butt')
+        paintBands(() => shine, (t) => radiusAt(t) * 0.4, 0.36, 'butt')
         view.globalAlpha = alpha
 
         // The two long ridges a banana has, one lit and one in shade, so the peel reads as round.
@@ -534,6 +538,7 @@ export function bananaPage(options: BananaPageOptions): string {
           const strength = Math.min(1, (ripe - 24) / 62)
           for (let i = 2; i < samples.length; i += 5) {
             const sample = samples[i]
+            if (sample.x < -2 * CELL || sample.x > canvas.width + 2 * CELL || sample.y < -2 * CELL || sample.y > canvas.height + 2 * CELL) continue
             const r = radiusAt(sample.t)
             const spot = noise(i * 7.31)
             const size = noise(i * 2.17)
@@ -571,6 +576,7 @@ export function bananaPage(options: BananaPageOptions): string {
           const patches = Math.round(rot * 5)
           for (let p = 0; p < patches; p += 1) {
             const sample = sampleAt(0.08 + 0.86 * ((p + 0.5) / Math.max(1, patches)) + noise(p * 4.7) * 0.06)
+            if (sample.x < -2 * CELL || sample.x > canvas.width + 2 * CELL || sample.y < -2 * CELL || sample.y > canvas.height + 2 * CELL) continue
             const r = radiusAt(sample.t)
             view.fillStyle = 'rgba(40, 24, 7, ' + (0.16 + rot * 0.34).toFixed(3) + ')'
             view.beginPath()
@@ -591,6 +597,7 @@ export function bananaPage(options: BananaPageOptions): string {
           for (let c = 0; c < colonies; c += 1) {
             const path = (c + 0.5) / colonies
             const sample = sampleAt(Math.min(0.96, 0.04 + 0.92 * Math.pow(path, 1.3)))
+            if (sample.x < -2 * CELL || sample.x > canvas.width + 2 * CELL || sample.y < -2 * CELL || sample.y > canvas.height + 2 * CELL) continue
             const r = radiusAt(sample.t)
             const side = noise(c * 3.7) > 0.5 ? 1 : -1
             const mx = sample.x + sample.nx * r * 0.42 * side
@@ -678,7 +685,7 @@ export function bananaPage(options: BananaPageOptions): string {
           view.fill()
         }
 
-        if (label) {
+        if (label && head.x > -CELL && head.x < canvas.width + CELL && head.y > -CELL && head.y < canvas.height + CELL) {
           // The player's name sits above the head in small letters, over a dark halo so it reads on the wood.
           view.globalAlpha = 1
           const size = Math.max(9, Math.round(9 * UNIT))
@@ -850,9 +857,21 @@ export function bananaPage(options: BananaPageOptions): string {
         })
       }
 
+      function advanceClock(clock, dt, latestStep, age, estimate, margin) {
+        const target = latestStep - 1 + age / estimate - margin
+        // Far off (a hidden tab, a long gap, a restarted counter): start again at the target. Otherwise only ever forwards.
+        if (Math.abs(target - clock) > 2) return Math.min(latestStep, target)
+        const rate = 1 + Math.max(-0.08, Math.min(0.08, (target - clock) * 0.2))
+        return Math.max(clock, Math.min(latestStep, clock + dt / estimate * rate))
+      }
+
       function smoothCells(player) {
-        const before = previous.size === latest.size && previous.players.find(p => p.id === player.id)
-        return trailCells(player, before, latest.size, (performance.now() - receivedAt) / 120)
+        let after = history.find(s => s.step >= clock) || latest
+        const index = history.indexOf(after)
+        const before = history[Math.max(0, index - 1)] || after
+        const current = after.players.find(p => p.id === player.id) || player
+        const prior = before.size === after.size && before.players.find(p => p.id === player.id)
+        return trailCells(current, prior, after.size, (clock - before.step) / (after.step - before.step || 1))
       }
 
       let camera = { x: 15, y: 15 }
@@ -890,10 +909,12 @@ export function bananaPage(options: BananaPageOptions): string {
           if (!cells.length) continue
           const shiftX = camera.x + delta(cells[0].x, camera.x, size) - cells[0].x - left
           const shiftY = camera.y + delta(cells[0].y, camera.y, size) - cells[0].y - top
+          const minX = Math.min(...cells.map(c => c.x)) + shiftX, maxX = Math.max(...cells.map(c => c.x)) + shiftX
+          const minY = Math.min(...cells.map(c => c.y)) + shiftY, maxY = Math.max(...cells.map(c => c.y)) + shiftY
           for (const dx of [-size, 0, size]) for (const dy of [-size, 0, size]) {
+            if (maxX + dx < -1 || minX + dx >= COLS + 1 || maxY + dy < -1 || minY + dy >= ROWS + 1) continue
             const shown = cells.map(c => ({ x: c.x + shiftX + dx, y: c.y + shiftY + dy }))
-            if (shown.some(c => c.x >= -1 && c.x < COLS + 1 && c.y >= -1 && c.y < ROWS + 1))
-              drawBanana(shown, player.ripe, player.safe ? 0.5 : 1, player.name + ' (' + player.cells.length + ')', player, time)
+            drawBanana(shown, player.ripe, player.safe ? 0.5 : 1, player.name + ' (' + player.cells.length + ')', player, time)
           }
           const dx = delta(cells[0].x, camera.x, size), dy = delta(cells[0].y, camera.y, size)
           if (size > 30 && player.id !== myId && (Math.abs(dx) > 15 || Math.abs(dy) > 15)) {
@@ -920,6 +941,8 @@ export function bananaPage(options: BananaPageOptions): string {
       }
 
       function frame(now) {
+        if (history.length && lastFrame && !document.hidden) clock = advanceClock(clock, now - lastFrame, latest.step, now - receivedAt, stepEstimate, margin)
+        lastFrame = now
         draw(now)
         requestAnimationFrame(frame)
       }
@@ -1027,6 +1050,12 @@ export function bananaPage(options: BananaPageOptions): string {
       let latest = { size: 30, players: [], foods: [] }
       let previous = latest
       let receivedAt = 0
+      let history = []
+      let clock = 0, lastFrame = 0, stepEstimate = 120, margin = 0.15
+      document.addEventListener('visibilitychange', () => {
+        lastFrame = 0
+        if (!document.hidden && history.length) clock = Math.max(clock, latest.step - 1 - margin)
+      })
       let growthMessage = ''
 
       // The link other people open to join the same counter: this machine's network address plus the path of this page.
@@ -1052,9 +1081,22 @@ export function bananaPage(options: BananaPageOptions): string {
         connection.hidden = true
         previous = latest
         latest = data
-        receivedAt = performance.now()
+        const now = performance.now()
+        const steps = data.step - previous.step
+        if (history.length && steps > 0) {
+          const interval = (now - receivedAt) / steps
+          const jitter = Math.abs(interval - stepEstimate)
+          stepEstimate = Math.max(90, Math.min(200, stepEstimate + (interval - stepEstimate) * 0.05))
+          const desired = Math.min(0.6, 0.15 + jitter / stepEstimate)
+          margin += (desired - margin) * (desired > margin ? 0.15 : 0.02)
+        }
+        receivedAt = now
         const players = new Map(data.players.map(p => [p.id, p]))
         for (const p of data.players) p.lag = nextLag(previous.players.find(q => q.id === p.id && q.moved <= p.moved), p.cells.length)
+        if (!history.length || data.step < previous.step) { history = []; clock = Math.max(0, data.step - 1 - margin) }
+        if (history.length && data.step === history[history.length - 1].step) history.pop()
+        history.push(data)
+        if (history.length > 4) history.shift()
         for (const id of bulges.keys()) {
           const before = previous.players.find(p => p.id === id)
           const current = players.get(id)

@@ -124,22 +124,30 @@ export function apply(ctx: Context): void {
   const world = createWorld()
   const streams = new Map<string, Set<(snapshot?: ReturnType<typeof world.snapshot>) => void>>()
   const disconnected = new Map<string, true>()
-  let timer: ReturnType<typeof setInterval> | undefined
-  const stopIfEmpty = () => { if (!world.count && timer) { clearInterval(timer); timer = undefined } }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const stopIfEmpty = () => { if (!world.count && timer) { clearTimeout(timer); timer = undefined } }
   const startTimer = () => {
     if (!timer) {
-      timer = setInterval(() => {
+      let next = performance.now() + STEP_MS
+      const tick = () => {
         world.step()
         for (const key of disconnected.keys()) if (world.resume(key).state !== 'playing') disconnected.delete(key)
         const snapshot = world.snapshot()
         for (const group of streams.values()) for (const send of group) send(snapshot)
         stopIfEmpty()
-      }, STEP_MS)
+        if (!timer) return
+        next += STEP_MS
+        const now = performance.now()
+        if (now - next > 3 * STEP_MS) next = now + STEP_MS
+        timer = setTimeout(tick, Math.max(0, next - now))
+        timer.unref()
+      }
+      timer = setTimeout(tick, STEP_MS)
       timer.unref()
     }
   }
   ctx.effect(() => () => {
-    if (timer) clearInterval(timer)
+    if (timer) clearTimeout(timer)
     for (const group of streams.values()) for (const close of group) close()
     streams.clear()
   })
