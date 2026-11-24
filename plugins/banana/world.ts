@@ -1,8 +1,10 @@
 export const STEP_MS = 120
+export const ripenFactor = (length: number) => Math.max(1, Math.min(6, 1 + (length - 6) / 12))
+export const speedFactor = (length: number) => 1 + 0.25 * (Math.min(Math.max(length, 20), 100) - 20) / 80
 const MIN_SIZE = 30
 type Cell = [number, number]
 type Food = { x: number; y: number; kind: 'grape' | 'sugar' | 'ice' }
-type Player = { id: string; name: string; cells: Cell[]; score: number; ripe: number; dir: Cell; queue: Cell[]; safeUntil: number; growth: number }
+type Player = { id: string; name: string; cells: Cell[]; score: number; ripe: number; dir: Cell; queue: Cell[]; safeUntil: number; growth: number; credit: number; moved: number }
 
 export function createWorld({ random = Math.random }: { random?: () => number } = {}) {
   const players = new Map<string, Player>()
@@ -80,7 +82,7 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
       peak = nextPeak
       const [x, y] = spot
       const id = old?.id ?? crypto.randomUUID()
-      players.set(key, { id, name, cells: Array.from({ length: 6 }, (_, i) => [(x - i + size) % size, y]), score: 0, ripe: 0, dir: [1, 0], queue: [], safeUntil: tick + 25, growth: 0 })
+      players.set(key, { id, name, cells: Array.from({ length: 6 }, (_, i) => [(x - i + size) % size, y]), score: 0, ripe: 0, dir: [1, 0], queue: [], safeUntil: tick + 25, growth: 0, credit: 0, moved: 0 })
       refill()
       return id
     },
@@ -104,9 +106,17 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
     step() {
       tick++
       ended = []
+      for (const p of players.values()) {
+        p.ripe = Math.min(100, p.ripe + .00035 * STEP_MS * ripenFactor(p.cells.length))
+        p.credit += speedFactor(p.cells.length)
+      }
+      for (let round = 0; round < 2; round++) {
+      if (![...players.values()].some(p => p.credit >= 1 - 1e-9)) break
       const starts = new Map([...players].map(([key, p]) => [key, { length: p.cells.length }] as const))
       for (const [key, p] of [...players].sort((a, b) => a[1].id < b[1].id ? -1 : a[1].id > b[1].id ? 1 : 0)) {
-        p.ripe = Math.min(100, p.ripe + .00035 * STEP_MS)
+        if (p.credit < 1 - 1e-9) continue
+        p.credit = Math.max(0, p.credit - 1)
+        p.moved++
         p.dir = p.queue.shift() ?? p.dir
         const head: Cell = [(p.cells[0][0] + p.dir[0] + size) % size, (p.cells[0][1] + p.dir[1] + size) % size]
         let reason = p.cells.some(c => c[0] === head[0] && c[1] === head[1]) ? 'Tangle!' : ''
@@ -154,9 +164,10 @@ export function createWorld({ random = Math.random }: { random?: () => number } 
         p.ripe = Math.max(0, p.ripe - 30)
         end(victim, 'Eaten!', p.name)
       }
+      }
       if (!players.size) { size = MIN_SIZE; peak = 0; foods = foods.filter(f => f.x < size && f.y < size) }
       refill()
     },
-    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe, safe: tick <= p.safeUntil })), ended: ended.map(e => ({ ...e })) } },
+    snapshot() { return { step: tick, size: size, foods: foods.map(f => ({ ...f })), players: [...players.values()].map(p => ({ id: p.id, name: p.name, cells: p.cells.map(c => [...c]), score: p.score, ripe: p.ripe, moved: p.moved, credit: Math.round(p.credit * 1000) / 1000, safe: tick <= p.safeUntil })), ended: ended.map(e => ({ ...e })) } },
   }
 }

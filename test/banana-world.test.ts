@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createWorld } from '../plugins/banana/world.ts'
+import { createWorld, ripenFactor, speedFactor } from '../plugins/banana/world.ts'
 
 test('world restarts a player with the same public id, wraps, tangles and removes leavers', () => {
   const world = createWorld({ random: () => 0 })
@@ -63,8 +63,8 @@ test('grape and sugar make the banana fresher and never below 0', () => {
     }
     const [x, y] = me.cells[0]!
     const food = before.foods.find((f) => f.x === x && f.y === y)
-    if (!food) continue
-    const expected = Math.max(0, before.players[0]!.ripe + 0.042 - drop[food.kind])
+    if (!food || me.moved - before.players[0]!.moved !== 1) continue
+    const expected = Math.max(0, before.players[0]!.ripe + 0.042 * ripenFactor(before.players[0]!.cells.length) - drop[food.kind])
     assert.ok(Math.abs(me.ripe - expected) < 1e-6, `${food.kind}: ${before.players[0]!.ripe} -> ${me.ripe}`)
     if (before.players[0]!.ripe > 0) seen.add(food.kind)
   }
@@ -285,3 +285,59 @@ test('a ripe board spawns frost', async () => {
   ripeWorld.step()
   assert.ok(ripeWorld.snapshot().foods.some((f: { kind: string }) => f.kind === 'ice'))
 })
+
+
+test('length factors and step credit control ripening and movement', async () => {
+  for (const [length, ripe, speed] of [[0, 1, 1], [6, 1, 1], [20, 1 + 14 / 12, 1], [30, 3, 1 + 0.25 * 10 / 80], [66, 6, 1 + 0.25 * 46 / 80], [100, 6, 1.25], [200, 6, 1.25]]) {
+    assert.equal(ripenFactor(length), ripe)
+    assert.equal(speedFactor(length), speed)
+  }
+  for (const length of [6, 100]) {
+    const world = await fixture()
+    const p = place(world, 'a', 'a', Array.from({ length }, (_, i) => [200 - i, 10]), [1, 0])
+    p.safeUntil = 1000
+    for (let i = 0; i < 100; i++) {
+      p.cells = Array.from({ length }, (_, n) => [10 - n % 10, 10 + Math.floor(n / 10)])
+      world.fixtureFoods.splice(0)
+      world.step()
+    }
+    assert.equal(p.moved, length === 6 ? 100 : 125)
+    assert.ok(Math.abs(p.ripe - 100 * .042 * ripenFactor(length)) < 1e-8)
+    assert.equal(world.snapshot().players[0].credit, 0)
+  }
+})
+
+test('double moves resolve food, turns and contacts separately, including stationary victims', async () => {
+  const world = await fixture()
+  const a = place(world, 'a', 'a', [[4,5],[3,5],[2,5],[1,5],[0,5],[29,5],[28,5]], [1,0])
+  const b = place(world, 'b', 'b', [[6,4],[6,5],[6,6],[6,7],[6,8],[6,9],[6,10]], [0,1])
+  a.credit = 1
+  b.credit = -1
+  world.fixtureFoods.splice(0, world.fixtureFoods.length, { x: 5, y: 5, kind: 'grape' })
+  world.step()
+  assert.equal(a.moved, 2)
+  assert.equal(b.moved, 0)
+  assert.equal(world.resume('b').reason, 'Eaten!')
+  assert.equal(a.score, 80)
+
+  const turns = await fixture()
+  const p = place(turns, 'a', 'a', [[10,10],[9,10],[8,10],[7,10],[6,10],[5,10],[4,10]], [1,0])
+  p.credit = 1
+  turns.turn('a', 0, 1); turns.turn('a', -1, 0)
+  turns.step()
+  assert.deepEqual(p.cells[0], [9,11])
+  assert.equal(p.queue.length, 0)
+})
+
+test('tangles in round two and retains endings from both rounds', async () => {
+  const world = await fixture()
+  const a = place(world, 'a', 'a', [[10,10],[9,10],[9,11],[10,11],[11,11],[11,10],[12,10]], [0,1])
+  const b = place(world, 'b', 'b', [[20,20],[21,20],[22,20]], [1,0])
+  a.credit = 1
+  a.queue = [[1,0], [0,1]]
+  world.step()
+  assert.equal(world.resume('a').reason, 'Tangle!')
+  assert.equal(world.resume('b').reason, 'Tangle!')
+  assert.equal(world.snapshot().ended.length, 2)
+})
+

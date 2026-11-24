@@ -92,7 +92,7 @@ export function bananaPage(options: BananaPageOptions): string {
         <div class="overlay" id="banana-connection" hidden role="status">Connection lost. Your banana keeps going. Reconnecting...</div>
         <div class="overlay" id="banana-overlay">
           <h2 id="banana-overlay-title">Ripe</h2>
-          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, and eating makes it fresh again before it moulds over. Other players on this counter show up live, with their names above them.</p>
+          <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, and eating makes it fresh again before it moulds over. A bigger banana ripens faster and moves a little faster. Other players on this counter show up live, with their names above them.</p>
           <input id="banana-nick" maxlength="16" placeholder="Your name" autocomplete="nickname" aria-label="Your name">
           <button id="banana-start" type="button">Start</button>
           <form id="banana-save" hidden>
@@ -113,7 +113,7 @@ export function bananaPage(options: BananaPageOptions): string {
         <h2>Top bananas</h2>
         <ol id="banana-board"><li>No scores yet.</li></ol>
       </section>
-      <p class="legend">Bigger bananas eat smaller ones. Eating makes the banana fresher. Grape +10 points, -8 ripeness. Sugar +25 points, -15 ripeness. Frost +5 points, -28 ripeness, no growth.</p>
+      <p class="legend">Bigger bananas eat smaller ones, ripen faster and move a little faster. Eating makes the banana fresher. Grape +10 points, -8 ripeness. Sugar +25 points, -15 ripeness. Frost +5 points, -28 ripeness, no growth.</p>
     </main>
     <script type="module">
       const canvas = document.getElementById('banana-canvas')
@@ -815,21 +815,38 @@ export function bananaPage(options: BananaPageOptions): string {
         return (((a - b + size / 2) % size + size) % size) - size / 2
       }
 
-      function smoothCells(player) {
-        const size = latest.size
-        const before = previous.size === size && previous.players.find(p => p.id === player.id)
-        const blend = Math.min(1, (performance.now() - receivedAt) / 120)
-        const cells = player.cells.map((cell, i) => {
-          const from = before && before.cells[i]
-          return from
-            ? { x: from[0] + delta(cell[0], from[0], size) * blend, y: from[1] + delta(cell[1], from[1], size) * blend }
-            : { x: cell[0], y: cell[1] }
-        })
-        for (let i = 1; i < cells.length; i++) {
-          cells[i].x = cells[i - 1].x + delta(cells[i].x, cells[i - 1].x, size)
-          cells[i].y = cells[i - 1].y + delta(cells[i].y, cells[i - 1].y, size)
+      function trailCells(player, before, size, blend) {
+        const wrapDelta = (a, b) => (((a - b + size / 2) % size + size) % size) - size / 2
+        const raw = player.cells.map(c => ({ x: c[0], y: c[1] }))
+        if (!before || player.moved < before.moved) {
+          for (let i = 1; i < raw.length; i++) {
+            raw[i].x = raw[i - 1].x + wrapDelta(player.cells[i][0], player.cells[i - 1][0])
+            raw[i].y = raw[i - 1].y + wrapDelta(player.cells[i][1], player.cells[i - 1][1])
+          }
+          return raw
         }
-        return cells
+        const moves = player.moved - before.moved
+        const trail = player.cells.concat(before.cells.slice(Math.max(0, player.cells.length - moves)))
+        const points = trail.map((c, i) => i ? {
+          x: 0, y: 0
+        } : { x: c[0], y: c[1] })
+        for (let i = 1; i < points.length; i++) {
+          points[i].x = points[i - 1].x + wrapDelta(trail[i][0], trail[i - 1][0])
+          points[i].y = points[i - 1].y + wrapDelta(trail[i][1], trail[i - 1][1])
+        }
+        const position = before.moved + before.credit + (player.moved + player.credit - before.moved - before.credit) * Math.max(0, Math.min(1, blend))
+        // Up to 20 cells a banana moves exactly one cell per step and is drawn without delay; a faster one needs one cell of lag to glide evenly.
+        const offset = Math.max(0, player.moved - position + (player.cells.length > 20 ? 1 : 0))
+        return raw.map((cell, i) => {
+          const at = i + offset, index = Math.floor(at), fraction = at - index
+          const from = points[Math.min(index, points.length - 1)], to = points[Math.min(index + 1, points.length - 1)]
+          return { x: from.x + (to.x - from.x) * fraction, y: from.y + (to.y - from.y) * fraction }
+        })
+      }
+
+      function smoothCells(player) {
+        const before = previous.size === latest.size && previous.players.find(p => p.id === player.id)
+        return trailCells(player, before, latest.size, (performance.now() - receivedAt) / 120)
       }
 
       let camera = { x: 15, y: 15 }

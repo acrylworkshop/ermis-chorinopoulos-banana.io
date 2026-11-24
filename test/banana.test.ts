@@ -324,3 +324,18 @@ test('the page script is valid JavaScript', () =>
     // A module may await at the top level; an async function body parses the same statements.
     new Script('(async () => {' + script + '\n})')
   }))
+test('trail interpolation travels evenly through an edge and a corner', async () => {
+  await withApp(async app => {
+    const html = await (await app.root.router.request('/banana')).text()
+    const source = html.match(/function trailCells\([^]*?\n      }/)?.[0]
+    assert.ok(source)
+    const trail = runInNewContext('(' + source + ')') as (p: unknown, b: unknown, size: number, blend: number) => { x: number; y: number }[]
+    const row = (from: number, count: number) => Array.from({ length: count }, (_, i) => [from - i, 5])
+    const before = { moved: 4, credit: .75, cells: row(29, 24) }
+    const player = { moved: 6, credit: 0, cells: [[0, 6], [0, 5], ...row(29, 22)] }
+    const short = trail({ moved: 5, credit: 0, cells: [[8, 5], [7, 5]] }, { moved: 4, credit: 0, cells: [[7, 5], [6, 5]] }, 30, 1)
+    assert.equal(short[0].x, 8, 'a short banana is drawn without delay')
+    const heads = [0, .2, .4, .6, .8, 1].map(t => trail(player, before, 30, t)[0])
+    for (let i = 1; i < heads.length; i++) assert.ok(Math.abs(Math.abs(heads[i].x - heads[i-1].x) + Math.abs(heads[i].y - heads[i-1].y) - .25) < 1e-9)
+  })
+})

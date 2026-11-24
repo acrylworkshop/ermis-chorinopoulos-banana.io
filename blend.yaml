@@ -5,7 +5,7 @@ kind: Blueprint
 metadata:
   id: acrylblends.ermis-chorinopoulos-banana.io
   name: ermis-chorinopoulos-banana.io
-  version: 0.2.0
+  version: 0.3.0
   visibility: public
 spec:
   runtime: cordis
