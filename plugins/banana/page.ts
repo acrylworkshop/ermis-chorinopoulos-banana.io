@@ -936,19 +936,31 @@ export function bananaPage(options: BananaPageOptions): string {
         }
       }
       let restored = { state: 'none' }
+      // A banana still held by another page: perhaps a second tab, perhaps a page that just closed.
+      let elsewhere = null
       try {
         const sessionKey = sessionStorage.getItem('banana-key')
         const stored = sessionKey || localStorage.getItem('banana-key')
         if (stored) {
-          let result = await resumeSoon(stored)
+          const result = await resumeSoon(stored)
           const reload = sessionKey && performance.getEntriesByType('navigation')[0]?.type === 'reload'
-          for (let i = 0; i < 5 && result.state === 'playing' && result.connected && !reload; i++) {
-            await new Promise(resolve => setTimeout(resolve, 400))
-            result = await resumeSoon(stored)
-          }
           if ((sessionKey && result.state === 'none') || result.state === 'ended' || (result.state === 'playing' && (!result.connected || reload))) { secret = stored; restored = result }
+          else if (result.state === 'playing') elsewhere = stored
         }
       } catch { secret = newKey() }
+      // Start works at once; the banana is taken back in the background if its page turns out to be gone.
+      if (elsewhere) {
+        let tries = 5
+        const check = setInterval(async () => {
+          if (game.running || joining || nickInput.value || tries-- <= 0) { clearInterval(check); return }
+          const result = await resume(elsewhere).catch(() => null)
+          if (result && result.state === 'playing' && !result.connected && !game.running && !joining && !nickInput.value) {
+            clearInterval(check)
+            try { sessionStorage.setItem('banana-key', elsewhere) } catch { return }
+            location.reload()
+          }
+        }, 400)
+      }
       const connection = document.getElementById('banana-connection')
       function endingText(reason, away, by) {
         const text = reason === 'Eaten!' ? 'Your banana was eaten by ' + by : reason === 'Tangle!' ? 'Your banana tied itself in a knot' : reason === 'Replaced' ? 'Your place was given to someone else because the counter was full' : 'Your banana went rotten'
