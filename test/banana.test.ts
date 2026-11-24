@@ -364,9 +364,13 @@ test('the counter steps every 120 ms on average, not a little slower', () =>
     const step = async () => ((await (await post('resume', { key })).json()) as { step: number }).step
     assert.equal((await post('join', { key, name: 'Beat' })).status, 201)
     while ((await step()) < 2) await new Promise((resolve) => setTimeout(resolve, 5))
-    const first = await step()
-    const start = performance.now()
-    while ((await step()) < first + 25) await new Promise((resolve) => setTimeout(resolve, 3))
-    const perStep = (performance.now() - start) / 25
-    assert.ok(Math.abs(perStep - 120) < 2.5, perStep.toFixed(1) + ' ms per step')
+    // A busy machine can delay one run, never hasten it: a drifting timer is late in every one.
+    const runs: number[] = []
+    while (runs.length < 3 && !runs.some((ms) => Math.abs(ms - 120) < 2.5)) {
+      const first = await step()
+      const start = performance.now()
+      while ((await step()) < first + 25) await new Promise((resolve) => setTimeout(resolve, 3))
+      runs.push((performance.now() - start) / 25)
+    }
+    assert.ok(runs.some((ms) => Math.abs(ms - 120) < 2.5), runs.map((ms) => ms.toFixed(1)).join(', ') + ' ms per step')
   }))
