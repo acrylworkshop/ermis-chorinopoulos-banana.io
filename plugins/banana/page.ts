@@ -95,6 +95,7 @@ export function bananaPage(options: BananaPageOptions): string {
           <p id="banana-overlay-text">Arrows, WASD or swipe. It wraps around the counter, ripens on its own, and eating makes it fresh again before it moulds over. A bigger banana ripens faster and moves a little faster. Other players on this counter show up live, with their names above them.</p>
           <input id="banana-nick" maxlength="16" placeholder="Your name" autocomplete="nickname" aria-label="Your name">
           <button id="banana-start" type="button">Start</button>
+          <button id="banana-continue" type="button" hidden></button>
           <form id="banana-save" hidden>
             <input id="banana-name" maxlength="16" placeholder="Your name" autocomplete="nickname" required>
             <button type="submit">Save score</button>
@@ -138,6 +139,7 @@ export function bananaPage(options: BananaPageOptions): string {
       const overlayTitle = document.getElementById('banana-overlay-title')
       const overlayText = document.getElementById('banana-overlay-text')
       const startBtn = document.getElementById('banana-start')
+      const continueBtn = document.getElementById('banana-continue')
       const saveForm = document.getElementById('banana-save')
       const nameInput = document.getElementById('banana-name')
       const nickInput = document.getElementById('banana-nick')
@@ -192,6 +194,8 @@ export function bananaPage(options: BananaPageOptions): string {
       async function start() {
         if (joining || game.running) return
         joining = true
+        recoveryStopped = true
+        continueBtn.hidden = true
         myName = nickInput.value.trim().slice(0, 16) || myName
         try {
           let joined
@@ -1000,28 +1004,42 @@ export function bananaPage(options: BananaPageOptions): string {
         }
       }
       let restored = { state: 'none' }
-      // A banana still held by another page: perhaps a second tab, perhaps a page that just closed.
-      let elsewhere = null
+      let recoveryStopped = false
+      let elsewhere = null, sameTab = false, reload = false
       try {
         const sessionKey = sessionStorage.getItem('banana-key')
         const stored = sessionKey || localStorage.getItem('banana-key')
         if (stored) {
           const result = await resumeSoon(stored)
-          const reload = sessionKey && performance.getEntriesByType('navigation')[0]?.type === 'reload'
-          if ((sessionKey && result.state === 'none') || result.state === 'ended' || (result.state === 'playing' && (!result.connected || reload))) { secret = stored; restored = result }
-          else if (result.state === 'playing') elsewhere = stored
+          sameTab = !!sessionKey
+          reload = sameTab && performance.getEntriesByType('navigation')[0]?.type === 'reload'
+          if (sameTab && !result.connected) { secret = stored; restored = result }
+          else if (!sameTab && !result.connected && result.state === 'ended') restored = result
+          else if (!sameTab && !result.connected && result.state === 'playing') {
+            elsewhere = stored
+            continueBtn.textContent = 'Continue as ' + result.name
+            continueBtn.hidden = false
+          } else if (result.connected) elsewhere = stored
         }
       } catch { secret = newKey() }
-      // Start works at once; the banana is taken back in the background if its page turns out to be gone.
-      if (elsewhere) {
-        let tries = 5
+      nickInput.addEventListener('input', () => { recoveryStopped = true })
+      continueBtn.addEventListener('click', () => {
+        try { sessionStorage.setItem('banana-key', elsewhere); location.reload() } catch {}
+      })
+      if (elsewhere && continueBtn.hidden) {
+        if (reload) statusEl.textContent = 'Reconnecting to your banana... or press Start to play as someone new.'
+        let tries = reload ? 80 : 5
         const check = setInterval(async () => {
-          if (game.running || joining || nickInput.value || tries-- <= 0) { clearInterval(check); return }
+          if (recoveryStopped || game.running || joining || tries-- <= 0) { clearInterval(check); return }
           const result = await resume(elsewhere).catch(() => null)
-          if (result && result.state === 'playing' && !result.connected && !game.running && !joining && !nickInput.value) {
+          if (result && result.state === 'playing' && !result.connected && !recoveryStopped && !game.running && !joining) {
             clearInterval(check)
-            try { sessionStorage.setItem('banana-key', elsewhere) } catch { return }
-            location.reload()
+            if (sameTab) {
+              try { sessionStorage.setItem('banana-key', elsewhere); location.reload() } catch {}
+            } else {
+              continueBtn.textContent = 'Continue as ' + result.name
+              continueBtn.hidden = false
+            }
           }
         }, 400)
       }
@@ -1202,7 +1220,7 @@ export function bananaPage(options: BananaPageOptions): string {
       }
 
       window.addEventListener('keydown', (event) => {
-        if (event.target instanceof HTMLInputElement) return
+        if (event.target instanceof HTMLInputElement || event.target === continueBtn) return
         const key = event.key.length === 1 ? event.key.toLowerCase() : event.key
         const vector = KEYS[key]
         if (vector) {

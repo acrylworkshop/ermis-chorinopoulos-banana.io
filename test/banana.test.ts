@@ -57,6 +57,7 @@ test('serves the game page and an empty board', () =>
     assert.ok(html.includes('<title>Ripe, a banana game</title>'), 'the page names the game')
     assert.ok(html.includes('id="banana-canvas"'), 'the page carries the board')
     assert.ok(html.includes('const COLS = 30'), 'the board is 30 cells across')
+    assert.ok(html.includes('id="banana-continue"'), 'the page offers to continue a previous game')
     assert.ok(html.includes('id="banana-nick"'), 'the page asks for the name it shows above the banana')
     assert.ok(html.includes('id="banana-join"'), 'the page has a line for the link others join with')
     assert.ok(html.includes("fetch('/banana/scores')"), 'the page asks its own route for the board')
@@ -197,7 +198,10 @@ test('a disconnected banana keeps moving and its ending can be resumed', () =>
     })
     const key = 'player_key_123456789'
     assert.equal((await send('resume', { key: 'bad' })).status, 400)
-    assert.deepEqual(await (await send('resume', { key })).json(), { state: 'none' })
+    assert.deepEqual(await (await send('resume', { key })).json(), { state: 'none', connected: false })
+    const waiting = (await app.root.router.request('/banana/room/events?key=' + key)).body!.getReader()
+    assert.deepEqual(await (await send('resume', { key })).json(), { state: 'none', connected: true })
+    await waiting.cancel()
     const { id } = await (await send('join', { key, name: 'Ada' })).json() as { id: string }
     const player = (await app.root.router.request('/banana/room/events?key=' + key)).body!.getReader()
     assert.deepEqual(await (await send('resume', { key })).json(), { state: 'playing', id, step: 0, name: 'Ada', connected: true })
@@ -217,6 +221,10 @@ test('a disconnected banana keeps moving and its ending can be resumed', () =>
     assert.equal(result.state, 'ended')
     assert.equal(result.reason, 'Tangle!')
     assert.equal(result.name, 'Ada')
+    assert.equal((result as { connected?: boolean }).connected, false)
+    const endedStream = (await app.root.router.request('/banana/room/events?key=' + key)).body!.getReader()
+    assert.equal((await (await send('resume', { key })).json() as { connected: boolean }).connected, true)
+    await endedStream.cancel()
     let text = ''
     while (!text.includes('Tangle!')) text += new TextDecoder().decode((await spectator.read()).value)
     assert.ok(!text.includes(key))

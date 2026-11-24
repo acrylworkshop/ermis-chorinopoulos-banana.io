@@ -260,7 +260,7 @@ export function apply(ctx: Context): void {
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid body' }, 400) }
       if (!body || typeof body !== 'object' || !('key' in body) || typeof body.key !== 'string' || !KEY.test(body.key)) return c.json({ error: 'invalid body' }, 400)
       const result = world.resume(body.key)
-      return c.json(result.state === 'playing' ? { ...result, connected: streams.has(body.key) } : result)
+      return c.json({ ...result, connected: streams.has(body.key) })
     })
     .post('/room/join', async (c) => {
       let body: unknown
