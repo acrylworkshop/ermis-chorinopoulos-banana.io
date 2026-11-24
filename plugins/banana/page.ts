@@ -197,9 +197,15 @@ export function bananaPage(options: BananaPageOptions): string {
           let joined
           if (socket && socket.readyState === WebSocket.OPEN) {
             joined = await new Promise((resolve, reject) => {
-              pendingJoin = { resolve, reject }
+              const request = pendingJoin = { resolve, reject }
               socket.send(JSON.stringify({ type: 'join', name: myName }))
-              setTimeout(() => reject(new Error('The counter did not answer. Press Start again.')), 5000)
+              setTimeout(() => {
+                if (pendingJoin !== request) return
+                // A fresh socket, so a late answer to this join cannot answer the next one.
+                pendingJoin = null
+                connect()
+                reject(new Error('The counter did not answer. Press Start again.'))
+              }, 5000)
             })
           } else {
             if (!fallback) throw new Error('Connecting to the counter...')
